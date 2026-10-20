@@ -52,11 +52,18 @@ export interface Settings {
     maxFrames: number;
     /** Let a vision model read the screenshots and pick images per topic. */
     analyze: boolean;
-    /** Empty = the summary model. Must accept image input. */
-    model: string;
-    detail: 'auto' | 'low' | 'high';
     /** Maximum images shown under each topic of the minutes. */
     perTopic: number;
+  };
+
+  /** API that reads the screenshots; its model must accept image input. */
+  vision: ApiEndpoint & {
+    /** Reuse base URL, API key and headers from the summary endpoint (empty model = summary model). */
+    sameAsSummary: boolean;
+    detail: 'auto' | 'low' | 'high';
+    /** Empty = provider default. */
+    temperature: string;
+    jsonMode: boolean;
   };
 
   // Output
@@ -102,9 +109,17 @@ export const DEFAULT_SETTINGS: Settings = {
     sensitivity: 'medium',
     maxFrames: 150,
     analyze: true,
-    model: '',
-    detail: 'auto',
     perTopic: 2,
+  },
+  vision: {
+    sameAsSummary: true,
+    baseUrl: 'https://api.openai.com/v1',
+    apiKey: '',
+    model: '',
+    extraHeaders: '',
+    detail: 'auto',
+    temperature: '',
+    jsonMode: true,
   },
   outputLanguage: '',
   template: 'general',
@@ -117,20 +132,33 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const KEY = 'settings';
 
-export function mergeSettings(stored: Partial<Settings> | undefined): Settings {
+type StoredSettings = Partial<Settings> & {
+  // Before the vision API had its own settings (0.1.x).
+  slides?: Partial<Settings['slides']> & { model?: string; detail?: Settings['vision']['detail'] };
+};
+
+export function mergeSettings(stored: StoredSettings | undefined): Settings {
   const s = stored ?? {};
+  const legacy = { model: s.slides?.model, detail: s.slides?.detail };
+  const { model: _model, detail: _detail, ...slides } = s.slides ?? {};
   return {
     ...DEFAULT_SETTINGS,
     ...s,
     transcription: { ...DEFAULT_SETTINGS.transcription, ...s.transcription },
     summary: { ...DEFAULT_SETTINGS.summary, ...s.summary },
-    slides: { ...DEFAULT_SETTINGS.slides, ...s.slides },
+    slides: { ...DEFAULT_SETTINGS.slides, ...slides },
+    vision: {
+      ...DEFAULT_SETTINGS.vision,
+      ...(legacy.model ? { model: legacy.model } : {}),
+      ...(legacy.detail ? { detail: legacy.detail } : {}),
+      ...s.vision,
+    },
   };
 }
 
 export async function getSettings(): Promise<Settings> {
   const data = await browser.storage.local.get(KEY);
-  return mergeSettings(data[KEY] as Partial<Settings> | undefined);
+  return mergeSettings(data[KEY] as StoredSettings | undefined);
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
@@ -163,10 +191,15 @@ function safeHost(url: string): string {
   }
 }
 
-/** The endpoint used to read screenshots: the summary endpoint, optionally with another model. */
+/** The endpoint that reads screenshots, after applying "same as summary". */
 export function visionEndpoint(s: Settings): ApiEndpoint {
+  if (!s.vision.sameAsSummary) return s.vision;
   const ep = summaryEndpoint(s);
-  return { ...ep, model: s.slides.model.trim() || ep.model };
+  return { ...ep, model: s.vision.model.trim() || ep.model };
+}
+
+export function isVisionConfigured(s: Settings): boolean {
+  return endpointReady(visionEndpoint(s));
 }
 
 export function isAiConfigured(s: Settings): boolean {

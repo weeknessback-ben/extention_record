@@ -4,7 +4,14 @@ import { recordingFolder, sanitizeFolder, sanitizeSegment } from '@/lib/files';
 import { chunkTranscript, formatClock, groupTranscript, isRtl, summaryToMarkdown } from '@/lib/format';
 import { cleanTabTitle, detectPlatform, siteOf } from '@/lib/meeting';
 import { finalSystemPrompt, normalizeSummary } from '@/lib/prompts';
-import { DEFAULT_SETTINGS, isAiConfigured, mergeSettings, summaryEndpoint } from '@/lib/settings';
+import {
+  DEFAULT_SETTINGS,
+  isAiConfigured,
+  isVisionConfigured,
+  mergeSettings,
+  summaryEndpoint,
+  visionEndpoint,
+} from '@/lib/settings';
 import type { Recording } from '@/lib/types';
 
 describe('files', () => {
@@ -117,6 +124,45 @@ describe('settings', () => {
     expect(isAiConfigured(DEFAULT_SETTINGS)).toBe(false);
     const local = mergeSettings({ transcription: { ...DEFAULT_SETTINGS.transcription, baseUrl: 'http://localhost:8000/v1' } });
     expect(isAiConfigured(local)).toBe(true);
+  });
+});
+
+describe('vision settings', () => {
+  const base = mergeSettings({ transcription: { ...DEFAULT_SETTINGS.transcription, apiKey: 'k' } });
+
+  it('reuses the summary API, with an optional model override', () => {
+    expect(visionEndpoint(base)).toMatchObject({ baseUrl: 'https://api.openai.com/v1', apiKey: 'k', model: 'gpt-4.1-mini' });
+    const override = mergeSettings({ ...base, vision: { ...base.vision, model: 'gpt-4o' } });
+    expect(visionEndpoint(override).model).toBe('gpt-4o');
+    expect(isVisionConfigured(base)).toBe(true);
+  });
+
+  it('can use its own URL, key, model and headers', () => {
+    const custom = mergeSettings({
+      ...base,
+      vision: {
+        ...base.vision,
+        sameAsSummary: false,
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiKey: 'or-key',
+        model: 'google/gemini-2.5-flash',
+        extraHeaders: '{"HTTP-Referer": "x"}',
+      },
+    });
+    expect(visionEndpoint(custom)).toMatchObject({
+      baseUrl: 'https://openrouter.ai/api/v1',
+      apiKey: 'or-key',
+      model: 'google/gemini-2.5-flash',
+      extraHeaders: '{"HTTP-Referer": "x"}',
+    });
+    expect(isVisionConfigured({ ...custom, vision: { ...custom.vision, model: '' } })).toBe(false);
+  });
+
+  it('migrates the vision model stored by version 0.1', () => {
+    const migrated = mergeSettings({ slides: { ...DEFAULT_SETTINGS.slides, model: 'gpt-4o', detail: 'high' } } as never);
+    expect(migrated.vision.model).toBe('gpt-4o');
+    expect(migrated.vision.detail).toBe('high');
+    expect('model' in migrated.slides).toBe(false);
   });
 });
 

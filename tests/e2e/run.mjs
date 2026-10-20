@@ -89,7 +89,12 @@ const server = http.createServer((req, res) => {
     const body = Buffer.concat(chunks);
     const json = (status, data) =>
       res.writeHead(status, { ...cors, 'Content-Type': 'application/json' }).end(JSON.stringify(data));
-    if (req.headers.authorization !== 'Bearer test-key') return json(401, { error: { message: 'bad key' } });
+    // The vision API is configured as a separate endpoint with its own key.
+    const isVisionApi = req.url.startsWith('/vision/');
+    if (req.headers.authorization !== (isVisionApi ? 'Bearer vision-key' : 'Bearer test-key')) {
+      return json(401, { error: { message: 'bad key' } });
+    }
+    if (isVisionApi && req.url !== '/vision/v1/chat/completions') return json(404, { error: { message: req.url } });
 
     if (req.url === '/v1/audio/transcriptions') {
       const text = body.toString('latin1');
@@ -108,7 +113,7 @@ const server = http.createServer((req, res) => {
         ],
       });
     }
-    if (req.url === '/v1/chat/completions') {
+    if (req.url === '/v1/chat/completions' || req.url === '/vision/v1/chat/completions') {
       const data = JSON.parse(body.toString('utf8'));
       const reply = (content) =>
         json(200, { choices: [{ message: { role: 'assistant', content: JSON.stringify(content) }, finish_reason: 'stop' }] });
@@ -120,11 +125,12 @@ const server = http.createServer((req, res) => {
         );
         const images = parts.filter((p) => p.type === 'image_url').map((p) => p.image_url);
         const times = parts.flatMap((p) => (p.type === 'text' ? [...p.text.matchAll(/at \[([\d:]+)\]/g)].map((m) => m[1]) : []));
-        requests.vision.push({ model: data.model, ids, images, times });
+        requests.vision.push({ url: req.url, model: data.model, ids, images, times });
         return reply({
           images: ids.map((id) => ({ id, kind: 'slide', useful: 8, caption: `Roadmap slide ${id}`, text: `Roadmap item ${id}` })),
         });
       }
+      if (isVisionApi) return json(400, { error: { message: 'summary sent to the vision API' } });
       requests.chats.push(data);
       // Pick the first two screenshots offered in the prompt for the first topic.
       const prompt = data.messages.find((m) => m.role === 'user').content;
@@ -208,6 +214,16 @@ try {
           jsonMode: true,
           maxCharsPerRequest: 120000,
         },
+        vision: {
+          sameAsSummary: false,
+          baseUrl: apiBase.replace(/\/v1$/, '/vision/v1'),
+          apiKey: 'vision-key',
+          model: 'vision-test',
+          extraHeaders: '',
+          detail: 'high',
+          temperature: '',
+          jsonMode: true,
+        },
         segmentMinutes: 1,
         autoProcess: true,
         autoPdf: true,
@@ -218,6 +234,15 @@ try {
   }, apiBase);
   await page.reload();
   await page.screenshot({ path: path.join(shots, 'options.png'), fullPage: true });
+
+  // "Test connection" of the vision API sends a test slide and shows what the model read.
+  const visionCard = page.locator('section', { hasText: 'API Vision' });
+  await visionCard.getByRole('button', { name: 'Tes koneksi' }).click();
+  await visionCard.getByText('Koneksi OK — model membaca: "Roadmap item 1"').waitFor({ timeout: 15_000 });
+  assert.equal(requests.vision.length, 1);
+  assert.match(requests.vision[0].images[0].url, /^data:image\/png;base64,/);
+  requests.vision.length = 0;
+  log('vision test connection OK');
 
   // Popup renders (opened as a normal tab here).
   const popup = await context.newPage();
@@ -348,11 +373,12 @@ try {
     `expected about ${expectedSlides} screenshots, got ${visionImages.length}`,
   );
   for (const v of requests.vision) {
-    assert.equal(v.model, 'gpt-test');
+    assert.equal(v.url, '/vision/v1/chat/completions');
+    assert.equal(v.model, 'vision-test');
     assert.ok(v.images.length <= 6 && v.ids.length === v.images.length);
     for (const img of v.images) {
       assert.match(img.url, /^data:image\/jpeg;base64,\/9j\//);
-      assert.equal(img.detail, 'auto');
+      assert.equal(img.detail, 'high');
     }
   }
 

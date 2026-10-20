@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { browser } from 'wxt/browser';
-import { chat, parseJsonLoose, silentWav, transcribe } from '@/lib/ai';
+import { blobToDataUrl, chat, parseJsonLoose, silentWav, transcribe } from '@/lib/ai';
 import { sanitizeFolder } from '@/lib/files';
 import { setUiLanguage, t, type I18nKey } from '@/lib/i18n';
-import { TEMPLATES } from '@/lib/prompts';
-import { getSettings, saveSettings, summaryEndpoint, type Settings } from '@/lib/settings';
+import { normalizeFrameAnalyses, TEMPLATES, VISION_SYSTEM_PROMPT } from '@/lib/prompts';
+import { getSettings, saveSettings, summaryEndpoint, visionEndpoint, type Settings } from '@/lib/settings';
 import type { TemplateId } from '@/lib/types';
 import { useMicPermission } from '@/components/hooks';
 
@@ -91,7 +91,9 @@ function originPattern(url: string): string | null {
 /** Asks Chrome for access to custom API hosts. Must run directly in a click handler. */
 function requestHostAccess(s: Settings): Promise<string[]> {
   const origins = [
-    ...new Set([s.transcription.baseUrl, summaryEndpoint(s).baseUrl].map(originPattern).filter(Boolean)),
+    ...new Set(
+      [s.transcription.baseUrl, summaryEndpoint(s).baseUrl, visionEndpoint(s).baseUrl].map(originPattern).filter(Boolean),
+    ),
   ] as string[];
   if (!origins.length) return Promise.resolve([]);
   return browser.permissions.request({ origins }).then(
@@ -102,13 +104,27 @@ function requestHostAccess(s: Settings): Promise<string[]> {
 
 type TestState = { status: 'idle' | 'running' | 'ok' | 'error'; message?: string };
 
-function TestButton(props: { run: () => Promise<void> }) {
+/** A small slide with known text, to check that the vision model really reads images. */
+const TEST_SLIDE_TEXT = 'Q4 ROADMAP 2026';
+
+async function testSlide(): Promise<Blob> {
+  const canvas = new OffscreenCanvas(640, 360);
+  const g = canvas.getContext('2d')!;
+  g.fillStyle = '#1a56db';
+  g.fillRect(0, 0, 640, 360);
+  g.fillStyle = '#fff';
+  g.font = 'bold 56px sans-serif';
+  g.fillText(TEST_SLIDE_TEXT, 40, 190);
+  return canvas.convertToBlob({ type: 'image/png' });
+}
+
+function TestButton(props: { run: () => Promise<string | void> }) {
   const [state, setState] = useState<TestState>({ status: 'idle' });
   const onClick = async () => {
     setState({ status: 'running' });
     try {
-      await props.run();
-      setState({ status: 'ok' });
+      const detail = await props.run();
+      setState({ status: 'ok', message: detail || undefined });
     } catch (err) {
       setState({ status: 'error', message: (err as Error).message });
     }
@@ -118,7 +134,11 @@ function TestButton(props: { run: () => Promise<void> }) {
       <button type="button" onClick={onClick} disabled={state.status === 'running'}>
         {state.status === 'running' ? t('options.testing') : t('options.test')}
       </button>
-      {state.status === 'ok' && <span className="banner ok small">{t('options.testOk')}</span>}
+      {state.status === 'ok' && (
+        <span className="banner ok small">
+          {state.message ? t('options.testOkRead', { text: state.message }) : t('options.testOk')}
+        </span>
+      )}
       {state.status === 'error' && (
         <span className="banner error small">{t('options.testFailed', { error: state.message ?? '' })}</span>
       )}
@@ -153,6 +173,7 @@ export default function App() {
     update({ transcription: { ...s.transcription, ...patch } });
   const updateSummary = (patch: Partial<Settings['summary']>) => update({ summary: { ...s.summary, ...patch } });
   const updateSlides = (patch: Partial<Settings['slides']>) => update({ slides: { ...s.slides, ...patch } });
+  const updateVision = (patch: Partial<Settings['vision']>) => update({ vision: { ...s.vision, ...patch } });
 
   function save() {
     // Permission prompt first, while the click still counts as a user gesture.
@@ -205,6 +226,26 @@ export default function App() {
       },
     );
     parseJsonLoose(reply);
+  };
+  const testVision = async () => {
+    await requestHostAccess(s);
+    const reply = await chat(
+      visionEndpoint(s),
+      [
+        { role: 'system', content: VISION_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Image #1 at [00:00:00]' },
+            { type: 'image_url', image_url: { url: await blobToDataUrl(await testSlide()), detail: s.vision.detail } },
+          ],
+        },
+      ],
+      { json: s.vision.jsonMode, temperature: s.vision.temperature },
+    );
+    const analysis = normalizeFrameAnalyses(parseJsonLoose(reply)).get(1);
+    if (!analysis) throw new Error('The reply did not describe the test image');
+    return analysis.text || analysis.caption;
   };
 
   return (
@@ -403,6 +444,77 @@ export default function App() {
       </section>
 
       <section className="card stack">
+        <h2>{t('options.section.vision')}</h2>
+        <div className="small muted">{t('options.visionIntro')}</div>
+        {!s.slides.analyze && <div className="banner warn">{t('options.visionDisabled')}</div>}
+        <Check
+          label={t('options.sameAsSummary')}
+          checked={s.vision.sameAsSummary}
+          onChange={(v) => updateVision({ sameAsSummary: v })}
+        />
+        {!s.vision.sameAsSummary && (
+          <>
+            <Field label={t('options.baseUrl')} hint={t('options.baseUrlHint')}>
+              <input type="url" value={s.vision.baseUrl} onChange={(e) => updateVision({ baseUrl: e.target.value })} />
+            </Field>
+            <div className="grid2">
+              <Field label={t('options.apiKey')}>
+                <Secret value={s.vision.apiKey} onChange={(v) => updateVision({ apiKey: v })} />
+              </Field>
+              <Field label={t('options.extraHeaders')} hint={t('options.extraHeadersHint')}>
+                <input
+                  type="text"
+                  placeholder="{}"
+                  value={s.vision.extraHeaders}
+                  onChange={(e) => updateVision({ extraHeaders: e.target.value })}
+                />
+              </Field>
+            </div>
+          </>
+        )}
+        <div className="grid2">
+          <Field
+            label={t('options.model')}
+            hint={s.vision.sameAsSummary ? t('options.visionModelHintSame') : t('options.visionModelHint')}
+          >
+            <input
+              type="text"
+              list="vision-models"
+              placeholder={s.vision.sameAsSummary ? s.summary.model : ''}
+              value={s.vision.model}
+              onChange={(e) => updateVision({ model: e.target.value })}
+            />
+            <datalist id="vision-models">
+              {VISION_MODELS.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </Field>
+          <Field label={t('options.slidesDetail')} hint={t('options.slidesDetailHint')}>
+            <select
+              value={s.vision.detail}
+              onChange={(e) => updateVision({ detail: e.target.value as Settings['vision']['detail'] })}
+            >
+              <option value="auto">auto</option>
+              <option value="low">low</option>
+              <option value="high">high</option>
+            </select>
+          </Field>
+          <Field label={t('options.temperature')}>
+            <input
+              type="text"
+              inputMode="decimal"
+              placeholder="—"
+              value={s.vision.temperature}
+              onChange={(e) => updateVision({ temperature: e.target.value })}
+            />
+          </Field>
+        </div>
+        <Check label={t('options.jsonMode')} checked={s.vision.jsonMode} onChange={(v) => updateVision({ jsonMode: v })} />
+        <TestButton run={testVision} />
+      </section>
+
+      <section className="card stack">
         <h2>{t('options.section.slides')}</h2>
         <Check label={t('options.slidesCapture')} checked={s.slides.capture} onChange={(v) => updateSlides({ capture: v })} />
         {s.slides.capture && (
@@ -431,27 +543,6 @@ export default function App() {
         <Check label={t('options.slidesAnalyze')} checked={s.slides.analyze} onChange={(v) => updateSlides({ analyze: v })} />
         {s.slides.analyze && (
           <div className="grid2">
-            <Field label={t('options.slidesModel')} hint={t('options.slidesModelHint')}>
-              <input
-                type="text"
-                list="vision-models"
-                placeholder={s.summary.model}
-                value={s.slides.model}
-                onChange={(e) => updateSlides({ model: e.target.value })}
-              />
-              <datalist id="vision-models">
-                {VISION_MODELS.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-            </Field>
-            <Field label={t('options.slidesDetail')} hint={t('options.slidesDetailHint')}>
-              <select value={s.slides.detail} onChange={(e) => updateSlides({ detail: e.target.value as Settings['slides']['detail'] })}>
-                <option value="auto">auto</option>
-                <option value="low">low</option>
-                <option value="high">high</option>
-              </select>
-            </Field>
             <Field label={t('options.slidesPerTopic')}>
               <input
                 type="number"

@@ -33,7 +33,7 @@ npm run build
 3. Halaman Pengaturan terbuka otomatis. Lakukan tiga langkah di bagian atas:
    1. **Izinkan mikrofon** (agar suara Anda ikut terekam).
    2. Isi **API key** (dan base URL / model kalau tidak memakai default OpenAI), lalu **Simpan pengaturan**.
-      Tombol **Tes koneksi** memeriksa kedua API.
+      Tombol **Tes koneksi** di tiap kartu (Transkripsi, Rangkuman, Vision) memeriksa API tersebut.
    3. Selesai. Pin ikon ekstensi di toolbar supaya mudah diakses.
 
 > Ekstensi meminta izin `debugger` untuk membuat PDF memakai mesin cetak Chrome. Selama PDF dibuat (±1 detik), Chrome
@@ -81,24 +81,38 @@ Ekstensi Chrome hanya boleh menulis di dalam direktori unduhan. Pilihan untuk me
 
 ## Pengaturan AI
 
-| Bagian | Default | Catatan |
+Ada tiga API terpisah. Masing-masing bisa diatur sendiri: **base URL, API key, model, dan header tambahan**, plus
+tombol **Tes koneksi**. Semuanya memakai format yang kompatibel dengan OpenAI, jadi bisa diarahkan ke OpenAI, Azure OpenAI
+(v1), OpenRouter, Groq, LiteLLM, atau server lokal.
+
+| API | Endpoint | Default | Opsi "pakai yang sama" |
+|---|---|---|---|
+| **Transkripsi** (speech-to-text) | `POST {baseUrl}/audio/transcriptions` | `https://api.openai.com/v1`, `gpt-4o-transcribe` | — |
+| **Rangkuman** (chat) | `POST {baseUrl}/chat/completions` | `gpt-4.1-mini` | sama dengan Transkripsi (aktif) |
+| **Vision** (membaca gambar) | `POST {baseUrl}/chat/completions` dengan gambar | model rangkuman | sama dengan Rangkuman (aktif) |
+
+Contoh: transkripsi lewat Groq (`whisper-large-v3`), rangkuman lewat OpenAI (`gpt-4.1`), dan vision lewat OpenRouter
+(`google/gemini-2.5-flash`). Matikan opsi "pakai yang sama" di kartu API yang bersangkutan, lalu isi URL, key, dan modelnya.
+Tes koneksi vision mengirim gambar slide uji dan menampilkan teks yang berhasil dibaca model, jadi langsung ketahuan
+apakah model itu benar-benar bisa membaca gambar.
+
+| Pengaturan | Default | Catatan |
 |---|---|---|
-| Transkripsi – Base URL | `https://api.openai.com/v1` | Memanggil `POST {baseUrl}/audio/transcriptions` |
 | Transkripsi – Model | `gpt-4o-transcribe` | Terbaik untuk meeting multibahasa. `whisper-1` memberi timestamp per kalimat. `gpt-4o-transcribe-diarize` menambah label pembicara. |
 | Petunjuk bahasa | kosong | Kosongkan agar bahasa dideteksi otomatis (disarankan untuk meeting campur bahasa) |
 | Kosakata | kosong | Nama orang, produk, singkatan: membantu akurasi transkripsi |
-| Rangkuman – Model | `gpt-4.1-mini` | Model chat apa saja (`gpt-4.1`, `gpt-4o`, `gpt-5-mini`, …). Memanggil `POST {baseUrl}/chat/completions` |
-| Temperature | kosong | Kosongkan untuk model reasoning (gpt-5, o-series) yang tidak menerima temperature |
-| Mode JSON | aktif | Otomatis dimatikan kalau server menolak `response_format` |
+| Rangkuman – Model | `gpt-4.1-mini` | Model chat apa saja (`gpt-4.1`, `gpt-4o`, `gpt-5-mini`, …) |
+| Temperature | kosong | Kosongkan untuk model reasoning (gpt-5, o-series) yang tidak menerima temperature. Rangkuman dan Vision punya isian sendiri. |
+| Mode JSON | aktif | Otomatis dimatikan kalau server menolak `response_format`. Rangkuman dan Vision punya isian sendiri. |
 | Maks. karakter per permintaan | 120.000 | Transkrip lebih panjang dirangkum per bagian lalu digabung (map-reduce) |
+| Vision – Model | kosong | Kosong = model rangkuman (hanya bila memakai API yang sama). Harus bisa menerima gambar (`gpt-4.1-mini`, `gpt-4.1`, `gpt-4o`, `gpt-5-mini`, …) |
+| Vision – Detail gambar | `auto` | `high` lebih baik membaca teks kecil, `low` lebih hemat token |
+| Header tambahan | kosong | JSON, misalnya `{"api-key": "…"}` untuk Azure atau `{"HTTP-Referer": "…"}` untuk OpenRouter |
 | Bahasa notulen | kosong | Kosong = bahasa utama meeting. Bisa diisi bahasa apa saja: `English`, `Bahasa Indonesia`, `日本語`, … |
-| Header tambahan | kosong | JSON, misalnya `{"api-key": "…"}` untuk Azure |
 | Tangkapan layar presentasi | aktif | Diambil saat layar berganti lalu diam; area yang terus bergerak (video peserta, video yang diputar, scroll) diabaikan |
 | Sensitivitas | Sedang | Tinggi = perubahan kecil (poin baru muncul) juga ditangkap; Rendah = hanya slide/halaman baru |
 | Maks. tangkapan layar | 150 | Per meeting |
-| Baca gambar dengan AI | aktif | Memakai URL dan API key API rangkuman |
-| Model vision | kosong | Kosong = model rangkuman. Harus bisa menerima gambar (`gpt-4.1-mini`, `gpt-4.1`, `gpt-4o`, `gpt-5-mini`, …) |
-| Detail gambar | `auto` | `high` lebih baik membaca teks kecil, `low` lebih hemat token |
+| Baca gambar dengan AI | aktif | Memakai API Vision |
 | Gambar per topik | 2 | 0 = tanpa gambar di notulen (isi slide tetap dipakai untuk rangkuman) |
 
 Untuk server selain `api.openai.com`, Chrome meminta izin akses ke domain tersebut saat Anda menyimpan pengaturan.
@@ -181,5 +195,6 @@ npm run zip        # paket .zip
 `npm run test:e2e` membangun varian khusus (`--mode e2e`) yang bisa merekam stream sintetis, lalu memuatnya di Chromium,
 merekam ±70 detik "presentasi" sintetis (slide berganti tiap 8 detik + tile video bergerak) dengan mikrofon palsu dari
 tab Meet tiruan, menutup tab, lalu memeriksa video (durasi, codec, volume), jumlah segmen transkripsi, jumlah tangkapan
-layar dan permintaan vision, isi prompt, gambar di PDF, folder `images/`, Markdown, dan transkrip yang tersimpan di disk. Butuh browser Playwright
+layar dan permintaan vision (ke endpoint vision terpisah dengan key dan model sendiri, termasuk tombol Tes koneksi),
+isi prompt, gambar di PDF, folder `images/`, Markdown, dan transkrip yang tersimpan di disk. Butuh browser Playwright
 (`npx playwright install chromium`), `ffprobe`, dan `pdftotext`.

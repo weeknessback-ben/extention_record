@@ -14,7 +14,7 @@ import {
   type PromptContext,
   type VisualItem,
 } from './prompts';
-import { summaryEndpoint, visionEndpoint, type Settings } from './settings';
+import { isVisionConfigured, summaryEndpoint, visionEndpoint, type Settings } from './settings';
 import type { FrameRecord, MeetingSummary, Recording, TemplateId, TranscriptSegment } from './types';
 
 export type ProcessMode = 'all' | 'transcribe' | 'summarize';
@@ -88,6 +88,9 @@ async function analyzeFrames(rec: Recording, settings: Settings): Promise<{ fram
   const frames = await getFrames(rec.id);
   const todo = frames.filter((f) => !f.analysis);
   if (!settings.slides.analyze || !todo.length) return { frames };
+  if (!isVisionConfigured(settings)) {
+    return { frames, warning: 'The vision API is not set up (Settings → Vision API), so the screenshots were not used.' };
+  }
 
   const ep = visionEndpoint(settings);
   let done = frames.length - todo.length;
@@ -101,7 +104,7 @@ async function analyzeFrames(rec: Recording, settings: Settings): Promise<{ fram
       const content: ContentPart[] = [{ type: 'text', text: `${batch.length} screenshot(s) from the meeting "${rec.title}".` }];
       for (const frame of batch) {
         content.push({ type: 'text', text: `Image #${frame.id} at [${formatClock(frame.t / 1000)}]` });
-        content.push({ type: 'image_url', image_url: { url: await blobToDataUrl(frame.blob), detail: settings.slides.detail } });
+        content.push({ type: 'image_url', image_url: { url: await blobToDataUrl(frame.blob), detail: settings.vision.detail } });
       }
       const reply = await chat(
         ep,
@@ -109,7 +112,7 @@ async function analyzeFrames(rec: Recording, settings: Settings): Promise<{ fram
           { role: 'system', content: VISION_SYSTEM_PROMPT },
           { role: 'user', content },
         ],
-        { json: settings.summary.jsonMode, temperature: settings.summary.temperature },
+        { json: settings.vision.jsonMode, temperature: settings.vision.temperature },
       );
       const analyses = normalizeFrameAnalyses(parseJsonLoose(reply));
       for (const frame of batch) {

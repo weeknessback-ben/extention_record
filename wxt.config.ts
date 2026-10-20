@@ -3,7 +3,7 @@ import { defineConfig } from 'wxt';
 // See https://wxt.dev/api/config.html
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
-  manifest: {
+  manifest: ({ mode }) => ({
     name: 'Meeting Recorder & AI Minutes',
     description:
       'Record Google Meet / Zoom Web meetings (video + audio) and turn them into AI-generated PDF minutes with any OpenAI-compatible API.',
@@ -20,7 +20,8 @@ export default defineConfig({
     ],
     // tabCapture.getMediaStreamId from a service worker needs Chrome 116+.
     minimum_chrome_version: '116',
-    host_permissions: ['https://api.openai.com/*'],
+    // The e2e build talks to a local mock API without a permission prompt.
+    host_permissions: ['https://api.openai.com/*', ...(mode === 'e2e' ? ['http://127.0.0.1/*'] : [])],
     optional_host_permissions: ['https://*/*', 'http://*/*'],
     action: { default_title: 'Meeting Recorder' },
     commands: {
@@ -29,5 +30,5 @@ export default defineConfig({
         description: 'Start / stop recording the current tab',
       },
     },
-  },
+  }),
 });

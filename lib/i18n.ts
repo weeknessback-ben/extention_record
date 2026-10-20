@@ -149,9 +149,14 @@ const en = {
   'options.sensitivity.high': 'High',
   'options.slidesMax': 'Maximum screenshots per meeting',
   'options.slidesAnalyze': 'Read the screenshots with AI and pick the best images for each topic',
-  'options.slidesModel': 'Vision model (empty = same as the summary model)',
-  'options.slidesModelHint':
-    'Must accept images, e.g. gpt-4.1-mini, gpt-4.1, gpt-4o, gpt-5-mini. Uses the summary API URL and key.',
+  'options.section.vision': 'Vision API (reading images)',
+  'options.visionIntro':
+    'Reads the presentation screenshots (slide text, charts, diagrams) and helps pick the best images per topic. Any OpenAI-compatible chat API whose model accepts images.',
+  'options.visionDisabled': 'Turn on "Read the screenshots with AI" under Presentation images to use this API.',
+  'options.sameAsSummary': 'Use the same base URL, API key and headers as the summary API',
+  'options.visionModelHintSame': 'Empty = the summary model. Must accept images, e.g. gpt-4.1-mini, gpt-4.1, gpt-4o, gpt-5-mini.',
+  'options.visionModelHint': 'A model of this API that accepts images, e.g. gpt-4.1-mini, gpt-4o, gpt-5-mini.',
+  'options.testOkRead': 'Connection OK — the model read: "{text}"',
   'options.slidesDetail': 'Image detail',
   'options.slidesDetailHint': 'High reads small text on slides better but costs more tokens.',
   'options.slidesPerTopic': 'Images per topic in the minutes (0 = none)',
@@ -336,9 +341,15 @@ const id: Record<I18nKey, string> = {
   'options.sensitivity.high': 'Tinggi',
   'options.slidesMax': 'Maksimum tangkapan layar per meeting',
   'options.slidesAnalyze': 'Baca tangkapan layar dengan AI dan pilih gambar terbaik untuk setiap topik',
-  'options.slidesModel': 'Model vision (kosong = sama dengan model rangkuman)',
-  'options.slidesModelHint':
-    'Harus bisa menerima gambar, misalnya gpt-4.1-mini, gpt-4.1, gpt-4o, gpt-5-mini. Memakai URL dan API key API rangkuman.',
+  'options.section.vision': 'API Vision (membaca gambar)',
+  'options.visionIntro':
+    'Membaca tangkapan layar presentasi (teks slide, grafik, diagram) dan membantu memilih gambar terbaik per topik. Bisa memakai API chat apa saja yang kompatibel dengan OpenAI, asalkan modelnya menerima gambar.',
+  'options.visionDisabled': 'Aktifkan "Baca tangkapan layar dengan AI" di bagian Gambar presentasi untuk memakai API ini.',
+  'options.sameAsSummary': 'Gunakan base URL, API key, dan header yang sama dengan API rangkuman',
+  'options.visionModelHintSame':
+    'Kosong = model rangkuman. Harus bisa menerima gambar, misalnya gpt-4.1-mini, gpt-4.1, gpt-4o, gpt-5-mini.',
+  'options.visionModelHint': 'Model dari API ini yang bisa menerima gambar, misalnya gpt-4.1-mini, gpt-4o, gpt-5-mini.',
+  'options.testOkRead': 'Koneksi OK — model membaca: "{text}"',
   'options.slidesDetail': 'Detail gambar',
   'options.slidesDetailHint': 'Tinggi lebih baik membaca teks kecil di slide, tetapi memakai lebih banyak token.',
   'options.slidesPerTopic': 'Gambar per topik di notulen (0 = tanpa gambar)',
