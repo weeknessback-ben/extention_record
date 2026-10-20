@@ -71,7 +71,7 @@ const SUMMARY = {
   timeline: [{ time: '00:00:05', event: 'Pembukaan' }],
 };
 
-const requests = { transcriptions: [], chats: [] };
+const requests = { transcriptions: [], chats: [], vision: [] };
 
 const server = http.createServer((req, res) => {
   const cors = {
@@ -110,10 +110,28 @@ const server = http.createServer((req, res) => {
     }
     if (req.url === '/v1/chat/completions') {
       const data = JSON.parse(body.toString('utf8'));
+      const reply = (content) =>
+        json(200, { choices: [{ message: { role: 'assistant', content: JSON.stringify(content) }, finish_reason: 'stop' }] });
+      const parts = data.messages.flatMap((m) => (Array.isArray(m.content) ? m.content : []));
+      if (parts.some((p) => p.type === 'image_url')) {
+        // Vision request: describe every screenshot as a slide.
+        const ids = parts.flatMap((p) =>
+          p.type === 'text' ? [...p.text.matchAll(/Image #(\d+) at/g)].map((m) => Number(m[1])) : [],
+        );
+        const images = parts.filter((p) => p.type === 'image_url').map((p) => p.image_url);
+        const times = parts.flatMap((p) => (p.type === 'text' ? [...p.text.matchAll(/at \[([\d:]+)\]/g)].map((m) => m[1]) : []));
+        requests.vision.push({ model: data.model, ids, images, times });
+        return reply({
+          images: ids.map((id) => ({ id, kind: 'slide', useful: 8, caption: `Roadmap slide ${id}`, text: `Roadmap item ${id}` })),
+        });
+      }
       requests.chats.push(data);
-      return json(200, {
-        choices: [{ message: { role: 'assistant', content: JSON.stringify(SUMMARY) }, finish_reason: 'stop' }],
-      });
+      // Pick the first two screenshots offered in the prompt for the first topic.
+      const prompt = data.messages.find((m) => m.role === 'user').content;
+      const offered = [...prompt.matchAll(/^#(\d+) \[/gm)].map((m) => Number(m[1]));
+      const summary = structuredClone(SUMMARY);
+      summary.topics[0].images = offered.slice(0, 2).map((id) => ({ id, caption: `Slide roadmap #${id}` }));
+      return reply(summary);
     }
     json(404, { error: { message: `unknown path ${req.url}` } });
   });
@@ -315,6 +333,29 @@ try {
     assert.ok(r.isWebm && r.bytes > 20_000, 'segment should be a WebM file with audio');
   }
 
+  // Screenshots: captured when the slide changed, read by the vision model in batches.
+  const visionImages = requests.vision.flatMap((v) => v.images);
+  log(
+    'vision requests',
+    requests.vision.length,
+    'screenshots',
+    visionImages.length,
+    requests.vision.flatMap((v) => v.times),
+  );
+  const expectedSlides = Math.ceil((RECORD_SECONDS + 3) / 8);
+  assert.ok(
+    visionImages.length >= Math.max(1, expectedSlides - 2) && visionImages.length <= expectedSlides + 2,
+    `expected about ${expectedSlides} screenshots, got ${visionImages.length}`,
+  );
+  for (const v of requests.vision) {
+    assert.equal(v.model, 'gpt-test');
+    assert.ok(v.images.length <= 6 && v.ids.length === v.images.length);
+    for (const img of v.images) {
+      assert.match(img.url, /^data:image\/jpeg;base64,\/9j\//);
+      assert.equal(img.detail, 'auto');
+    }
+  }
+
   // Summary request carries the transcript with offsets for the second segment.
   assert.equal(requests.chats.length, 1);
   const chat = requests.chats[0];
@@ -324,6 +365,8 @@ try {
   assert.match(userPrompt, /\[00:00:01\] Segment 1: Halo semua/);
   if (EXPECTED_SEGMENTS > 1) assert.match(userPrompt, /\[00:01:0\d\] Segment 2: Halo semua/);
   assert.match(userPrompt, /Meeting title \(from the browser tab\): E2E Weekly Sync/);
+  assert.match(userPrompt, /Screenshots:\n#\d+ \[00:00:0\d\] slide, useful 8\/10: Roadmap slide \d+ \| text: "Roadmap item \d+"/);
+  assert.match(chat.messages[0].content, /"images": \[\{ "id": 0/);
 
   // PDF contents.
   const pdfText = execFileSync('pdftotext', ['-layout', path.join(folder, 'minutes.pdf'), '-']).toString();
@@ -338,7 +381,19 @@ try {
   ]) {
     assert.ok(pdfText.includes(s), `PDF should contain "${s}"`);
   }
+  const pdfImages =
+    execFileSync('pdfimages', ['-list', path.join(folder, 'minutes.pdf')])
+      .toString()
+      .trim()
+      .split('\n').length - 2;
+  log('images in PDF', pdfImages);
+  assert.ok(pdfImages >= 2, 'the PDF should contain the chosen screenshots');
+  assert.ok(pdfText.includes('Slide roadmap #'), 'screenshot captions should be in the PDF');
+  const savedImages = fs.readdirSync(path.join(folder, 'images'));
+  log('images folder', savedImages);
+  assert.equal(savedImages.length, 2);
   const md = fs.readFileSync(path.join(folder, 'minutes.md'), 'utf8');
+  assert.ok(md.includes(`![Slide roadmap #`) && md.includes(`](images/${savedImages[0]})`), 'markdown should link the images');
   assert.ok(md.includes('# Rapat Mingguan Tim Produk') && md.includes('田中 太郎') && md.includes('أحمد'));
   const txt = fs.readFileSync(path.join(folder, 'transcript.txt'), 'utf8');
   assert.ok(txt.includes('Segment 1') && txt.includes(`Segment ${EXPECTED_SEGMENTS}`));
@@ -351,7 +406,7 @@ try {
   // Report page.
   const report = await context.newPage();
   await report.goto(ext(`report.html?id=${start.recId}`));
-  await report.waitForSelector('.doc h1');
+  await report.waitForSelector('.doc figure img');
   await report.screenshot({ path: path.join(shots, 'report.png'), fullPage: true });
 
   // Re-summarise from the library uses the stored transcript (no new transcription calls).
@@ -360,6 +415,7 @@ try {
   while (requests.chats.length < 2 && Date.now() < deadline2) await sleep(500);
   assert.equal(requests.chats.length, 2, 're-summarise should call the chat API again');
   assert.equal(requests.transcriptions.length, EXPECTED_SEGMENTS, 're-summarise must not transcribe again');
+  assert.equal(requests.vision.flatMap((v) => v.images).length, visionImages.length, 're-summarise must not re-read the images');
 
   const relevantErrors = consoleErrors.filter((e) => !/favicon|Receiving end does not exist/.test(e));
   assert.deepEqual(relevantErrors, [], 'no console errors expected');

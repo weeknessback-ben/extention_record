@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { endpointUrl, parseExtraHeaders, parseJsonLoose, transcriptionFormat } from '@/lib/ai';
 import { recordingFolder, sanitizeFolder, sanitizeSegment } from '@/lib/files';
-import { chunkLines, formatClock, groupTranscript, isRtl, summaryToMarkdown } from '@/lib/format';
+import { chunkTranscript, formatClock, groupTranscript, isRtl, summaryToMarkdown } from '@/lib/format';
 import { cleanTabTitle, detectPlatform, siteOf } from '@/lib/meeting';
 import { finalSystemPrompt, normalizeSummary } from '@/lib/prompts';
 import { DEFAULT_SETTINGS, isAiConfigured, mergeSettings, summaryEndpoint } from '@/lib/settings';
@@ -70,8 +70,16 @@ describe('format', () => {
     expect(grouped[0]!.text).toBe('Halo semua. Let us start.');
   });
 
-  it('chunks lines without splitting them', () => {
-    expect(chunkLines(['aaaa', 'bbbb', 'cccc'], 9)).toEqual(['aaaa\nbbbb', 'cccc']);
+  it('chunks the transcript without splitting paragraphs', () => {
+    const segs = [
+      { start: 0, end: 5, text: 'aaaa' },
+      { start: 100, end: 105, text: 'bbbb' },
+      { start: 200, end: 205, text: 'cccc' },
+    ];
+    expect(chunkTranscript(segs, 40)).toEqual([
+      { text: '[00:00:00] aaaa\n[00:01:40] bbbb', start: 0 },
+      { text: '[00:03:20] cccc', start: 200 },
+    ]);
   });
 
   it('detects right-to-left languages', () => {
@@ -123,6 +131,8 @@ describe('prompts', () => {
       template: 'general' as const,
       outputLanguage: '日本語',
       customInstructions: '',
+      hasScreenshots: false,
+      imagesPerTopic: 0,
     };
     expect(finalSystemPrompt(ctx)).toContain('in 日本語');
     expect(finalSystemPrompt({ ...ctx, outputLanguage: '' })).toContain('spoken most in the meeting');

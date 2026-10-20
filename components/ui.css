@@ -225,6 +225,7 @@ label {
   color: var(--ok);
 }
 .badge.transcribing,
+.badge.analyzing,
 .badge.summarizing,
 .badge.saving {
   background: color-mix(in srgb, var(--accent) 15%, transparent);

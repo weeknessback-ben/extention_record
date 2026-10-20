@@ -44,6 +44,21 @@ export interface Settings {
     maxCharsPerRequest: number;
   };
 
+  // Screenshots of the shared screen
+  slides: {
+    /** Take a screenshot whenever the shared screen changes. */
+    capture: boolean;
+    sensitivity: 'low' | 'medium' | 'high';
+    maxFrames: number;
+    /** Let a vision model read the screenshots and pick images per topic. */
+    analyze: boolean;
+    /** Empty = the summary model. Must accept image input. */
+    model: string;
+    detail: 'auto' | 'low' | 'high';
+    /** Maximum images shown under each topic of the minutes. */
+    perTopic: number;
+  };
+
   // Output
   /** Empty = same as the dominant language of the meeting. */
   outputLanguage: string;
@@ -82,6 +97,15 @@ export const DEFAULT_SETTINGS: Settings = {
     jsonMode: true,
     maxCharsPerRequest: 120000,
   },
+  slides: {
+    capture: true,
+    sensitivity: 'medium',
+    maxFrames: 150,
+    analyze: true,
+    model: '',
+    detail: 'auto',
+    perTopic: 2,
+  },
   outputLanguage: '',
   template: 'general',
   customInstructions: '',
@@ -100,6 +124,7 @@ export function mergeSettings(stored: Partial<Settings> | undefined): Settings {
     ...s,
     transcription: { ...DEFAULT_SETTINGS.transcription, ...s.transcription },
     summary: { ...DEFAULT_SETTINGS.summary, ...s.summary },
+    slides: { ...DEFAULT_SETTINGS.slides, ...s.slides },
   };
 }
 
@@ -136,6 +161,12 @@ function safeHost(url: string): string {
   } catch {
     return '';
   }
+}
+
+/** The endpoint used to read screenshots: the summary endpoint, optionally with another model. */
+export function visionEndpoint(s: Settings): ApiEndpoint {
+  const ep = summaryEndpoint(s);
+  return { ...ep, model: s.slides.model.trim() || ep.model };
 }
 
 export function isAiConfigured(s: Settings): boolean {

@@ -5,6 +5,7 @@ export type RecordingStatus =
   | 'saving'
   | 'recorded'
   | 'transcribing'
+  | 'analyzing'
   | 'summarizing'
   | 'done'
   | 'error'
@@ -38,7 +39,7 @@ export interface VideoFileInfo {
 }
 
 export interface Progress {
-  stage: 'saving' | 'transcribing' | 'summarizing';
+  stage: 'saving' | 'transcribing' | 'analyzing' | 'summarizing';
   done: number;
   total: number;
 }
@@ -59,8 +60,12 @@ export interface Recording {
   status: RecordingStatus;
   progress?: Progress;
   error?: string;
+  /** Non-fatal problem, e.g. the images could not be analysed. */
+  warning?: string;
   video: VideoFileInfo;
   audioSegments: AudioSegmentMeta[];
+  /** Screenshots taken when the shared screen changed (see FrameRecord). */
+  frameCount?: number;
   /** Extra context from the user (participants, agenda, ...) passed to the AI. */
   notes: string;
   template?: TemplateId;
@@ -71,6 +76,46 @@ export interface Recording {
   summaryModel?: string;
   processedAt?: number;
   pdf?: { filename: string; savedAt: number };
+}
+
+export type FrameKind =
+  | 'slide'
+  | 'document'
+  | 'chart'
+  | 'diagram'
+  | 'code'
+  | 'whiteboard'
+  | 'website'
+  | 'screen'
+  | 'people'
+  | 'other';
+
+/** What the vision model read from a screenshot. */
+export interface FrameAnalysis {
+  kind: FrameKind;
+  /** 0-10: how useful the image is to document the meeting. */
+  useful: number;
+  caption: string;
+  /** Most important visible text, verbatim. */
+  text: string;
+}
+
+/** A screenshot of the meeting tab, stored in IndexedDB. */
+export interface FrameRecord {
+  id?: number;
+  recId: string;
+  /** Offset from the start of the recording, in ms. */
+  t: number;
+  width: number;
+  height: number;
+  blob: Blob;
+  analysis?: FrameAnalysis;
+}
+
+/** An image the AI picked to illustrate a topic. */
+export interface TopicImage {
+  id: number;
+  caption: string;
 }
 
 export interface SummaryLabels {
@@ -104,7 +149,7 @@ export interface MeetingSummary {
   participants: { name: string; role?: string }[];
   executiveSummary: string;
   keyPoints: string[];
-  topics: { title: string; time?: string; summary: string; points: string[] }[];
+  topics: { title: string; time?: string; summary: string; points: string[]; images: TopicImage[] }[];
   decisions: { decision: string; context?: string }[];
   actionItems: { task: string; owner?: string; deadline?: string; priority?: string }[];
   openQuestions: string[];

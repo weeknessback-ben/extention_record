@@ -135,9 +135,21 @@ export async function transcribe(
   return { text: (data.text ?? segments?.map((s) => s.text).join(' ') ?? '').trim(), segments };
 }
 
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } };
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  /** A string, or text and image parts for vision models. */
+  content: string | ContentPart[];
+}
+
+export async function blobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
 }
 
 /** POST {baseUrl}/chat/completions (OpenAI-compatible). Returns the reply text. */

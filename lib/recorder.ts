@@ -1,7 +1,8 @@
-import { addChunk, putRecording, updateRecording } from './db';
+import { addChunk, addFrame, putRecording, updateRecording } from './db';
 import { recordingFolder } from './files';
 import { detectPlatform } from './meeting';
 import { RESOLUTIONS, type Settings } from './settings';
+import { SlideCapture } from './slides';
 
 export interface RecorderStartOptions {
   recId: string;
@@ -59,6 +60,7 @@ export class MeetingRecorder {
   private mixedTrack?: MediaStreamTrack;
   private videoRecorder?: MediaRecorder;
   private segment?: OpenSegment;
+  private slides?: SlideCapture;
   private rotationTimer?: ReturnType<typeof setTimeout>;
   private writes: Promise<void> = Promise.resolve();
   private pendingSegments = new Set<Promise<void>>();
@@ -207,6 +209,20 @@ export class MeetingRecorder {
     this.startSegment(0, 0);
     this.scheduleRotation();
 
+    if (o.settings.slides.capture && typeof ImageCapture !== 'undefined') {
+      this.slides = new SlideCapture(videoTrack, {
+        sensitivity: o.settings.slides.sensitivity,
+        maxFrames: Math.max(1, o.settings.slides.maxFrames),
+        elapsed: () => this.elapsed(),
+        onFrame: (frame) =>
+          this.enqueue(async () => {
+            await addFrame({ recId, ...frame });
+            await updateRecording(recId, (r) => ({ frameCount: (r.frameCount ?? 0) + 1 }), { silent: true });
+          }),
+      });
+      this.slides.start();
+    }
+
     videoTrack.addEventListener('ended', () => {
       // Only when the tab went away; stopping tracks ourselves fires no 'ended'.
       if (this.stopping || this.recId !== recId) return;
@@ -281,6 +297,7 @@ export class MeetingRecorder {
   private async doStop(): Promise<string | undefined> {
     const recId = this.recId!;
     clearTimeout(this.rotationTimer);
+    this.slides?.stop();
     const endMs = this.elapsed();
 
     const video = this.videoRecorder;
@@ -307,23 +324,35 @@ export class MeetingRecorder {
     this.mixedTrack = undefined;
     this.videoRecorder = undefined;
     this.segment = undefined;
+    this.slides = undefined;
     return recId;
   }
 }
 
-/** Animated canvas + tone, used by the automated end-to-end tests. */
+/**
+ * Used by the automated end-to-end tests: a "presentation" whose slide
+ * changes every 8 s, with a small moving tile like a participant video, plus a tone.
+ */
 function syntheticStream(): MediaStream {
   const canvas = document.createElement('canvas');
   canvas.width = 640;
   canvas.height = 360;
   const g = canvas.getContext('2d')!;
+  const started = performance.now();
   let frame = 0;
   setInterval(() => {
-    g.fillStyle = `hsl(${(frame * 3) % 360} 60% 40%)`;
+    const slide = Math.floor((performance.now() - started) / 8000) + 1;
+    g.fillStyle = `hsl(${(slide * 67) % 360} 55% 35%)`;
     g.fillRect(0, 0, canvas.width, canvas.height);
     g.fillStyle = '#fff';
-    g.font = '48px sans-serif';
-    g.fillText(`frame ${frame++}`, 40, 200);
+    g.font = 'bold 44px sans-serif';
+    g.fillText(`Slide ${slide}`, 40, 110);
+    g.font = '24px sans-serif';
+    g.fillText(`Roadmap item ${slide}: release plan`, 40, 170);
+    g.fillStyle = '#222';
+    g.fillRect(560, 290, 70, 60);
+    g.fillStyle = '#9cf';
+    g.fillRect(565 + ((frame++ * 2) % 50), 300, 10, 10);
   }, 1000 / 30);
   const video = canvas.captureStream(30);
   const ctx = new AudioContext();

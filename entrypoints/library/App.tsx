@@ -9,7 +9,7 @@ import type { ActiveRecording, Recording, RecordingStatus, TemplateId } from '@/
 import { recoverRecording, saveVideo } from '@/lib/video';
 import { useRuntimeMessage } from '@/components/hooks';
 
-const BUSY: RecordingStatus[] = ['recording', 'saving', 'transcribing', 'summarizing'];
+const BUSY: RecordingStatus[] = ['recording', 'saving', 'transcribing', 'analyzing', 'summarizing'];
 
 function effectiveStatus(rec: Recording, active: ActiveRecording | null): RecordingStatus {
   // A "recording" entry that is not the live one was cut off (crash, browser closed).
@@ -82,6 +82,7 @@ function RecordingCard(props: { rec: Recording; state: BackgroundState; highligh
             <span>{platformName(rec.platform)}</span>
             {!rec.hasMic && <span>{t('library.noMic')}</span>}
             <span>{t('library.segments', { n: rec.audioSegments.length })}</span>
+            {(rec.frameCount ?? 0) > 0 && <span>{t('library.frames', { n: rec.frameCount ?? 0 })}</span>}
           </div>
         </div>
         <span className={`badge ${status}`}>
@@ -115,6 +116,7 @@ function RecordingCard(props: { rec: Recording; state: BackgroundState; highligh
       </div>
 
       {(rec.error || localError) && status !== 'recording' && <div className="banner error">{localError || rec.error}</div>}
+      {rec.warning && !rec.error && <div className="banner warn">{rec.warning}</div>}
 
       {status !== 'recording' && (
         <div className="rec-details">

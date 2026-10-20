@@ -312,7 +312,7 @@ export default defineBackground(() => {
     for (const rec of await listRecordings()) {
       if (rec.status === 'recording' || rec.status === 'saving') {
         await updateRecording(rec.id, { status: 'interrupted' });
-      } else if (rec.status === 'transcribing' || rec.status === 'summarizing') {
+      } else if (rec.status === 'transcribing' || rec.status === 'analyzing' || rec.status === 'summarizing') {
         await updateRecording(rec.id, { status: 'error', error: 'Processing was interrupted.', progress: undefined });
       }
     }

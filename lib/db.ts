@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { Recording } from './types';
+import type { FrameAnalysis, FrameRecord, Recording } from './types';
 import { broadcast } from './messages';
 
 export interface Chunk {
@@ -15,17 +15,24 @@ export interface Chunk {
 interface RecorderDB extends DBSchema {
   recordings: { key: string; value: Recording; indexes: { 'by-started': number } };
   chunks: { key: number; value: Chunk; indexes: { 'by-part': [string, string, number, number] } };
+  frames: { key: number; value: FrameRecord; indexes: { 'by-rec': [string, number] } };
 }
 
 let dbPromise: Promise<IDBPDatabase<RecorderDB>> | undefined;
 
 export function getDB(): Promise<IDBPDatabase<RecorderDB>> {
-  dbPromise ??= openDB<RecorderDB>('meeting-recorder', 1, {
-    upgrade(db) {
-      const recs = db.createObjectStore('recordings', { keyPath: 'id' });
-      recs.createIndex('by-started', 'startedAt');
-      const chunks = db.createObjectStore('chunks', { keyPath: 'id', autoIncrement: true });
-      chunks.createIndex('by-part', ['recId', 'kind', 'seg', 'seq']);
+  dbPromise ??= openDB<RecorderDB>('meeting-recorder', 2, {
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1) {
+        const recs = db.createObjectStore('recordings', { keyPath: 'id' });
+        recs.createIndex('by-started', 'startedAt');
+        const chunks = db.createObjectStore('chunks', { keyPath: 'id', autoIncrement: true });
+        chunks.createIndex('by-part', ['recId', 'kind', 'seg', 'seq']);
+      }
+      if (oldVersion < 2) {
+        const frames = db.createObjectStore('frames', { keyPath: 'id', autoIncrement: true });
+        frames.createIndex('by-rec', ['recId', 't']);
+      }
     },
   });
   return dbPromise;
@@ -103,9 +110,44 @@ export function deleteChunks(recId: string, kind: Chunk['kind'], seg = 0): Promi
   return deleteRange(partRange(recId, kind, seg));
 }
 
+function frameRange(recId: string) {
+  return IDBKeyRange.bound([recId, -Infinity], [recId, Infinity]);
+}
+
+export async function addFrame(frame: FrameRecord): Promise<number> {
+  return (await getDB()).add('frames', frame);
+}
+
+/** All screenshots of a recording, in time order. */
+export async function getFrames(recId: string): Promise<FrameRecord[]> {
+  return (await getDB()).getAllFromIndex('frames', 'by-rec', frameRange(recId));
+}
+
+export async function getFramesByIds(ids: number[]): Promise<Map<number, FrameRecord>> {
+  const db = await getDB();
+  const frames = await Promise.all(ids.map((id) => db.get('frames', id)));
+  return new Map(frames.filter((f): f is FrameRecord => Boolean(f)).map((f) => [f.id!, f]));
+}
+
+export async function setFrameAnalysis(id: number, analysis: FrameAnalysis): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction('frames', 'readwrite');
+  const frame = await tx.store.get(id);
+  if (frame) await tx.store.put({ ...frame, analysis });
+  await tx.done;
+}
+
 export async function deleteRecording(id: string): Promise<void> {
   // [id] sorts before every [id, ...] key and [id, []] after all of them.
   await deleteRange(IDBKeyRange.bound([id], [id, []]));
-  await (await getDB()).delete('recordings', id);
+  const db = await getDB();
+  const tx = db.transaction('frames', 'readwrite');
+  let cursor = await tx.store.index('by-rec').openKeyCursor(frameRange(id));
+  while (cursor) {
+    await tx.store.delete(cursor.primaryKey);
+    cursor = await cursor.continue();
+  }
+  await tx.done;
+  await db.delete('recordings', id);
   broadcast({ type: 'recordings-changed', recId: id });
 }

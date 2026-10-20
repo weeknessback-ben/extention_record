@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { browser } from 'wxt/browser';
-import { getRecording, updateRecording } from '@/lib/db';
+import { getFramesByIds, getRecording, updateRecording } from '@/lib/db';
 import { saveBlob, textBlob } from '@/lib/files';
 import {
   formatDate,
   formatDuration,
   groupTranscript,
+  imageFileName,
   formatClock,
   isRtl,
   labelsFor,
@@ -15,7 +16,9 @@ import {
 } from '@/lib/format';
 import { setUiLanguage, t } from '@/lib/i18n';
 import { getSettings, type Settings } from '@/lib/settings';
-import type { MeetingSummary, Recording } from '@/lib/types';
+import type { FrameRecord, MeetingSummary, Recording } from '@/lib/types';
+
+type ImageMap = Map<number, { url: string; frame: FrameRecord }>;
 
 const params = new URLSearchParams(location.search);
 const recId = params.get('id') ?? '';
@@ -86,7 +89,17 @@ function List({ items, ordered }: { items: string[]; ordered?: boolean }) {
   return ordered ? <ol>{children}</ol> : <ul>{children}</ul>;
 }
 
-function Minutes({ rec, s, includeTranscript }: { rec: Recording; s: MeetingSummary; includeTranscript: boolean }) {
+function Minutes({
+  rec,
+  s,
+  includeTranscript,
+  images,
+}: {
+  rec: Recording;
+  s: MeetingSummary;
+  includeTranscript: boolean;
+  images: ImageMap;
+}) {
   const L = labelsFor(s);
   const transcript = includeTranscript ? groupTranscript(rec.transcript ?? []) : [];
   return (
@@ -154,6 +167,19 @@ function Minutes({ rec, s, includeTranscript }: { rec: Recording; s: MeetingSumm
               </h3>
               {topic.summary && <Paragraphs text={topic.summary} />}
               {topic.points.length > 0 && <List items={topic.points} />}
+              {topic.images.map((img) => {
+                const image = images.get(img.id);
+                if (!image) return null;
+                return (
+                  <figure key={img.id}>
+                    <img src={image.url} width={image.frame.width} height={image.frame.height} alt={img.caption} />
+                    <figcaption dir="auto">
+                      <span className="time">{formatClock(image.frame.t / 1000)}</span>
+                      {img.caption}
+                    </figcaption>
+                  </figure>
+                );
+              })}
             </div>
           ))}
         </section>
@@ -267,6 +293,21 @@ export default function App() {
   }, []);
 
   const summary = rec?.summary;
+  const [images, setImages] = useState<ImageMap | null>(null);
+
+  // Screenshots the AI picked for the topics, from IndexedDB.
+  useEffect(() => {
+    if (!summary) return;
+    const ids = summary.topics.flatMap((topic) => topic.images.map((img) => img.id));
+    let urls: string[] = [];
+    void getFramesByIds(ids).then((frames) => {
+      const map: ImageMap = new Map();
+      for (const [id, frame] of frames) map.set(id, { url: URL.createObjectURL(frame.blob), frame });
+      urls = [...map.values()].map((v) => v.url);
+      setImages(map);
+    });
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, [summary]);
 
   useEffect(() => {
     if (summary && rec) {
@@ -294,10 +335,20 @@ export default function App() {
 
   async function saveText(kind: 'md' | 'txt'): Promise<string> {
     if (!rec || !summary || !settings) return '';
-    const blob =
-      kind === 'md'
-        ? textBlob(summaryToMarkdown(rec, summary, settings.pdfIncludeTranscript), 'text/markdown')
-        : textBlob(transcriptToText(rec));
+    let blob: Blob;
+    if (kind === 'md') {
+      // Save the chosen screenshots next to the Markdown so its image links work.
+      for (const { frame } of images?.values() ?? []) {
+        await saveBlob(frame.blob, `${rec.folder}/${imageFileName(frame.t)}`, { conflictAction: 'overwrite' });
+      }
+      const path = (id: number) => {
+        const image = images?.get(id);
+        return image ? imageFileName(image.frame.t) : undefined;
+      };
+      blob = textBlob(summaryToMarkdown(rec, summary, settings.pdfIncludeTranscript, path), 'text/markdown');
+    } else {
+      blob = textBlob(transcriptToText(rec));
+    }
     const saved = await saveBlob(blob, `${rec.folder}/${kind === 'md' ? 'minutes.md' : 'transcript.txt'}`, {
       conflictAction: 'overwrite',
     });
@@ -307,11 +358,12 @@ export default function App() {
 
   // Opened automatically after processing: export everything, then close.
   useEffect(() => {
-    if (!autoExport || started.current || !rec || !summary || !settings) return;
+    if (!autoExport || started.current || !rec || !summary || !settings || !images) return;
     started.current = true;
     void (async () => {
-      // Let fonts and layout settle before printing.
+      // Let fonts, images and layout settle before printing.
       await document.fonts.ready;
+      await Promise.all([...document.images].map((img) => img.decode().catch(() => {})));
       await new Promise((r) => setTimeout(r, 300));
       try {
         await savePdf();
@@ -325,7 +377,7 @@ export default function App() {
         // Keep the tab open; the banner explains what to do.
       }
     })();
-  }, [rec, summary, settings]);
+  }, [rec, summary, settings, images]);
 
   if (rec === undefined || !settings) return null;
   if (rec === null)
@@ -371,7 +423,7 @@ export default function App() {
         contentEditable={editing}
         suppressContentEditableWarning
       >
-        <Minutes rec={rec} s={summary} includeTranscript={settings.pdfIncludeTranscript} />
+        <Minutes rec={rec} s={summary} includeTranscript={settings.pdfIncludeTranscript} images={images ?? new Map()} />
       </article>
     </div>
   );

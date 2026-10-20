@@ -139,8 +139,26 @@
   font-size: 14px;
 }
 .topic {
+  margin-bottom: 14px;
+}
+.doc figure {
+  margin: 10px 0 16px;
   break-inside: avoid;
-  margin-bottom: 10px;
+}
+.doc figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  max-height: 380px;
+  width: auto;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.doc figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--soft);
 }
 .time {
   display: inline-block;

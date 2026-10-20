@@ -48,20 +48,28 @@ export function groupTranscript(segments: TranscriptSegment[]): TranscriptSegmen
   return out;
 }
 
-export function transcriptLines(segments: TranscriptSegment[]): string[] {
-  return groupTranscript(segments).map((s) => `[${formatClock(s.start)}]${s.speaker ? ` ${s.speaker}:` : ''} ${s.text}`);
+function transcriptLine(s: TranscriptSegment): string {
+  return `[${formatClock(s.start)}]${s.speaker ? ` ${s.speaker}:` : ''} ${s.text}`;
 }
 
-/** Splits transcript lines into chunks of at most `maxChars` characters. */
-export function chunkLines(lines: string[], maxChars: number): string[] {
-  const chunks: string[] = [];
-  let current = '';
-  for (const line of lines) {
-    if (current && current.length + line.length + 1 > maxChars) {
+export function transcriptLines(segments: TranscriptSegment[]): string[] {
+  return groupTranscript(segments).map(transcriptLine);
+}
+
+/**
+ * Splits the transcript into chunks of at most `maxChars` characters without
+ * cutting a paragraph; `start` is where each chunk begins, in seconds.
+ */
+export function chunkTranscript(segments: TranscriptSegment[], maxChars: number): { text: string; start: number }[] {
+  const chunks: { text: string; start: number }[] = [];
+  let current: { text: string; start: number } | undefined;
+  for (const seg of groupTranscript(segments)) {
+    const line = transcriptLine(seg);
+    if (current && current.text.length + line.length + 1 > maxChars) {
       chunks.push(current);
-      current = '';
+      current = undefined;
     }
-    current = current ? `${current}\n${line}` : line;
+    current = current ? { ...current, text: `${current.text}\n${line}` } : { text: line, start: seg.start };
   }
   if (current) chunks.push(current);
   return chunks;
@@ -115,6 +123,11 @@ export function formatDate(ts: number, locale?: string): string {
   }
 }
 
+/** File name of a screenshot saved next to the minutes, e.g. "images/slide-00-12-30.jpg". */
+export function imageFileName(t: number): string {
+  return `images/slide-${formatClock(t / 1000).replace(/:/g, '-')}.jpg`;
+}
+
 export function transcriptToText(rec: Recording): string {
   const header = [
     rec.title,
@@ -132,7 +145,13 @@ function mdCell(s?: string): string {
   return (s ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
 }
 
-export function summaryToMarkdown(rec: Recording, s: MeetingSummary, includeTranscript: boolean): string {
+export function summaryToMarkdown(
+  rec: Recording,
+  s: MeetingSummary,
+  includeTranscript: boolean,
+  /** Relative path of a saved screenshot, by frame id. */
+  imagePath?: (id: number) => string | undefined,
+): string {
   const L = labelsFor(s);
   const out: string[] = [`# ${s.title || rec.title}`, ''];
   out.push(`**${L.date}:** ${formatDate(rec.startedAt, s.language)}  `);
@@ -151,6 +170,10 @@ export function summaryToMarkdown(rec: Recording, s: MeetingSummary, includeTran
       out.push(`### ${t.time ? `[${t.time}] ` : ''}${t.title}`, '');
       if (t.summary) out.push(t.summary, '');
       if (t.points.length) out.push(bullets(t.points), '');
+      for (const img of t.images) {
+        const path = imagePath?.(img.id);
+        if (path) out.push(`![${img.caption.replace(/[[\]]/g, '')}](${encodeURI(path)})`, `*${img.caption}*`, '');
+      }
     }
   }
   if (s.decisions.length) {

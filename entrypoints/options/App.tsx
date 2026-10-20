@@ -10,6 +10,7 @@ import { useMicPermission } from '@/components/hooks';
 
 const TRANSCRIPTION_MODELS = ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'gpt-4o-transcribe-diarize', 'whisper-1'];
 const SUMMARY_MODELS = ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-5', 'gpt-5-mini', 'o4-mini'];
+const VISION_MODELS = ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o', 'gpt-4o-mini', 'gpt-5-mini', 'gpt-5'];
 const LANGUAGES = [
   'English',
   'Bahasa Indonesia',
@@ -151,6 +152,7 @@ export default function App() {
   const updateTranscription = (patch: Partial<Settings['transcription']>) =>
     update({ transcription: { ...s.transcription, ...patch } });
   const updateSummary = (patch: Partial<Settings['summary']>) => update({ summary: { ...s.summary, ...patch } });
+  const updateSlides = (patch: Partial<Settings['slides']>) => update({ slides: { ...s.slides, ...patch } });
 
   function save() {
     // Permission prompt first, while the click still counts as a user gesture.
@@ -161,6 +163,11 @@ export default function App() {
         folder: sanitizeFolder(s.folder),
         segmentMinutes: Math.min(20, Math.max(1, Math.round(s.segmentMinutes) || 5)),
         summary: { ...s.summary, maxCharsPerRequest: Math.max(4000, Math.round(s.summary.maxCharsPerRequest) || 120000) },
+        slides: {
+          ...s.slides,
+          maxFrames: Math.min(500, Math.max(1, Math.round(s.slides.maxFrames) || 150)),
+          perTopic: Math.min(4, Math.max(0, Math.round(s.slides.perTopic) || 0)),
+        },
       };
       await saveSettings(cleaned);
       setSettings(cleaned);
@@ -393,6 +400,69 @@ export default function App() {
         </div>
         <Check label={t('options.jsonMode')} checked={s.summary.jsonMode} onChange={(v) => updateSummary({ jsonMode: v })} />
         <TestButton run={testSummary} />
+      </section>
+
+      <section className="card stack">
+        <h2>{t('options.section.slides')}</h2>
+        <Check label={t('options.slidesCapture')} checked={s.slides.capture} onChange={(v) => updateSlides({ capture: v })} />
+        {s.slides.capture && (
+          <div className="grid2">
+            <Field label={t('options.slidesSensitivity')} hint={t('options.slidesSensitivityHint')}>
+              <select
+                value={s.slides.sensitivity}
+                onChange={(e) => updateSlides({ sensitivity: e.target.value as Settings['slides']['sensitivity'] })}
+              >
+                <option value="low">{t('options.sensitivity.low')}</option>
+                <option value="medium">{t('options.sensitivity.medium')}</option>
+                <option value="high">{t('options.sensitivity.high')}</option>
+              </select>
+            </Field>
+            <Field label={t('options.slidesMax')}>
+              <input
+                type="number"
+                min={1}
+                max={500}
+                value={s.slides.maxFrames}
+                onChange={(e) => updateSlides({ maxFrames: Number(e.target.value) })}
+              />
+            </Field>
+          </div>
+        )}
+        <Check label={t('options.slidesAnalyze')} checked={s.slides.analyze} onChange={(v) => updateSlides({ analyze: v })} />
+        {s.slides.analyze && (
+          <div className="grid2">
+            <Field label={t('options.slidesModel')} hint={t('options.slidesModelHint')}>
+              <input
+                type="text"
+                list="vision-models"
+                placeholder={s.summary.model}
+                value={s.slides.model}
+                onChange={(e) => updateSlides({ model: e.target.value })}
+              />
+              <datalist id="vision-models">
+                {VISION_MODELS.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </Field>
+            <Field label={t('options.slidesDetail')} hint={t('options.slidesDetailHint')}>
+              <select value={s.slides.detail} onChange={(e) => updateSlides({ detail: e.target.value as Settings['slides']['detail'] })}>
+                <option value="auto">auto</option>
+                <option value="low">low</option>
+                <option value="high">high</option>
+              </select>
+            </Field>
+            <Field label={t('options.slidesPerTopic')}>
+              <input
+                type="number"
+                min={0}
+                max={4}
+                value={s.slides.perTopic}
+                onChange={(e) => updateSlides({ perTopic: Number(e.target.value) })}
+              />
+            </Field>
+          </div>
+        )}
       </section>
 
       <section className="card stack">
