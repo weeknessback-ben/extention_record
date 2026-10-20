@@ -1,0 +1,75 @@
+.page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.page > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.page > header img {
+  width: 32px;
+  height: 32px;
+}
+.page > header h1 {
+  font-size: 22px;
+}
+.rec-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rec-card.highlight {
+  outline: 2px solid var(--accent);
+}
+.rec-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.rec-head .title {
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rec-head .title:hover {
+  text-decoration: underline;
+}
+.rec-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.rec-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rec-details {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 12px;
+}
+@media (max-width: 700px) {
+  .rec-details {
+    grid-template-columns: 1fr;
+  }
+}
+.title-input {
+  font-size: 15px;
+  font-weight: 600;
+}
+.summary-preview {
+  font-size: 13px;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

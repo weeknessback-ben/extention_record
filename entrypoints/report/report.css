@@ -1,0 +1,227 @@
+.page {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 20px 20px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+  padding: 8px 0;
+}
+
+/* The document always looks like paper, also in dark mode, so the PDF matches the screen. */
+.doc {
+  --ink: #1f2328;
+  --soft: #57606a;
+  --line: #d8dee4;
+  --tint: #f3f6fa;
+  --brand: #1a56db;
+  background: #fff;
+  color: var(--ink);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  padding: 44px 52px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    'Noto Sans',
+    'Noto Sans CJK SC',
+    'Noto Sans JP',
+    'Noto Sans KR',
+    'Noto Sans Arabic',
+    'Noto Sans Hebrew',
+    'Noto Sans Thai',
+    'Noto Sans Devanagari',
+    'Noto Sans Bengali',
+    sans-serif;
+}
+.doc[contenteditable='true'] {
+  outline: 2px dashed var(--accent);
+  outline-offset: 4px;
+}
+.doc .muted {
+  color: var(--soft);
+}
+.doc h1 {
+  font-size: 26px;
+  margin: 4px 0 14px;
+  color: var(--ink);
+}
+.doc h2 {
+  font-size: 16px;
+  margin: 26px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--brand);
+  color: var(--brand);
+  text-transform: none;
+  break-after: avoid;
+}
+.doc h3 {
+  font-size: 14px;
+  margin: 16px 0 6px;
+  break-after: avoid;
+}
+.doc p {
+  margin: 0 0 8px;
+}
+.doc ul,
+.doc ol {
+  margin: 0 0 8px;
+  padding-inline-start: 22px;
+}
+.doc li {
+  margin-bottom: 4px;
+}
+.kicker {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+.meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+  padding: 12px 16px;
+  background: var(--tint);
+  border-radius: 8px;
+}
+.meta dt {
+  font-size: 11px;
+  color: var(--soft);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.meta dd {
+  margin: 0;
+  font-weight: 500;
+}
+.participants {
+  margin-top: 14px;
+}
+.participants h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--soft);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.chips {
+  list-style: none;
+  padding: 0 !important;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chips li {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin: 0;
+  font-size: 12.5px;
+}
+.summary p {
+  font-size: 14px;
+}
+.topic {
+  break-inside: avoid;
+  margin-bottom: 10px;
+}
+.time {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand);
+  background: var(--tint);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-inline-end: 8px;
+}
+.decisions li {
+  margin-bottom: 8px;
+}
+.doc table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.doc th {
+  text-align: start;
+  background: var(--tint);
+  color: var(--soft);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.doc th,
+.doc td {
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  vertical-align: top;
+}
+.doc tr {
+  break-inside: avoid;
+}
+.timeline td {
+  border-width: 0 0 1px;
+}
+.timeline td.time {
+  width: 1%;
+  white-space: nowrap;
+  display: table-cell;
+  background: none;
+}
+.transcript {
+  break-before: page;
+}
+.transcript p {
+  font-size: 11.5px;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.doc-foot {
+  margin-top: 30px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  color: var(--soft);
+}
+
+@page {
+  size: A4;
+  margin: 15mm;
+}
+@media print {
+  body {
+    background: #fff;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .page {
+    padding: 0;
+    max-width: none;
+  }
+  .doc {
+    box-shadow: none;
+    border-radius: 0;
+    padding: 0;
+    outline: none !important;
+  }
+}

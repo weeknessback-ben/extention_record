@@ -1,0 +1,33 @@
+{
+  "name": "meeting-recorder-ai-minutes",
+  "description": "Record Google Meet / Zoom Web meetings and turn them into AI-generated PDF minutes.",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "build:e2e": "wxt build --mode e2e",
+    "zip": "wxt zip",
+    "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "npm run build:e2e && node tests/e2e/run.mjs",
+    "postinstall": "wxt prepare",
+    "format": "prettier --write \"{entrypoints,lib,components,tests}/**/*.{ts,tsx,mjs,css}\" \"*.{ts,json}\""
+  },
+  "dependencies": {
+    "idb": "^8.0.4",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@wxt-dev/module-react": "^1.1.5",
+    "playwright": "^1.56.1",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5",
+    "wxt": "^0.21.3"
+  }
+}
