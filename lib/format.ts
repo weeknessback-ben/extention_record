@@ -107,6 +107,16 @@ export function labelsFor(summary: MeetingSummary): SummaryLabels {
 
 const RTL_LANGS = new Set(['ar', 'arc', 'ckb', 'dv', 'fa', 'he', 'iw', 'ku', 'ps', 'sd', 'ug', 'ur', 'yi']);
 
+export function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+/** Page footer of the PDF minutes: title on the left, page numbers on the right. */
+export function pdfFooterTemplate(title: string): string {
+  return `<div style="font-size:8px;width:100%;padding:0 15mm;color:#777;display:flex;justify-content:space-between;font-family:system-ui,sans-serif">
+        <span>${escapeHtml(title)}</span><span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>`;
+}
+
 export function isRtl(language: string): boolean {
   return RTL_LANGS.has(language.toLowerCase().split(/[-_]/)[0] ?? '');
 }

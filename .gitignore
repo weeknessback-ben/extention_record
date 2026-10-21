@@ -26,3 +26,15 @@ web-ext.config.ts
 *.sw?
 
 tests/e2e/.tmp
+
+# Processing server build output and local data
+server/dist
+server/data
+
+# Build-time defaults with your own server and key (see README): never commit
+.env.local
+.env.*.local
+
+# QA replay build and outputs
+tests/qa/.build
+tests/qa/.tmp

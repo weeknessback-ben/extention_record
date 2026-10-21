@@ -9,7 +9,8 @@ import type { ActiveRecording, Recording, RecordingStatus, TemplateId } from '@/
 import { recoverRecording, saveVideo } from '@/lib/video';
 import { useRuntimeMessage } from '@/components/hooks';
 
-const BUSY: RecordingStatus[] = ['recording', 'saving', 'transcribing', 'analyzing', 'summarizing'];
+const BUSY: RecordingStatus[] = ['recording', 'saving', 'uploading', 'queued', 'transcribing', 'analyzing', 'summarizing'];
+const ON_SERVER: RecordingStatus[] = ['queued', 'transcribing', 'analyzing', 'summarizing'];
 
 function effectiveStatus(rec: Recording, active: ActiveRecording | null): RecordingStatus {
   // A "recording" entry that is not the live one was cut off (crash, browser closed).
@@ -64,6 +65,8 @@ function RecordingCard(props: { rec: Recording; state: BackgroundState; highligh
 
   const progress = rec.progress;
   const pct = progress && progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
+  // Once uploaded, the server does the work; the laptop only shows its progress.
+  const onServer = state.settings.processing === 'server' && Boolean(rec.server) && ON_SERVER.includes(status as RecordingStatus);
 
   return (
     <div ref={ref} className={`card rec-card${props.highlight ? ' highlight' : ''}`}>
@@ -88,6 +91,7 @@ function RecordingCard(props: { rec: Recording; state: BackgroundState; highligh
         <span className={`badge ${status}`}>
           {status === 'recording' && <span className="dot live" />}
           {t(`status.${status}` as I18nKey)}
+          {onServer && ` · ${t('library.serverBadge')}`}
         </span>
       </div>
 
@@ -101,6 +105,7 @@ function RecordingCard(props: { rec: Recording; state: BackgroundState; highligh
           </div>
         </div>
       )}
+      {onServer && <div className="small muted">{t('library.onServer')}</div>}
 
       {rec.summary?.executiveSummary && <div className="summary-preview">{rec.summary.executiveSummary}</div>}
 

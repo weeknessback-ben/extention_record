@@ -1,0 +1,9 @@
+{
+  "name": "meeting-server",
+  "private": true,
+  "type": "module",
+  "description": "Runtime dependencies of server.mjs (npm run build:server). playwright-core prints the PDF.",
+  "dependencies": {
+    "playwright-core": "1.61.1"
+  }
+}

@@ -16,21 +16,29 @@ export function endpointUrl(baseUrl: string, path: string): string {
   return url.toString();
 }
 
-export function parseExtraHeaders(raw: string): Record<string, string> {
+function parseJsonObject(raw: string, error: string): Record<string, unknown> {
   if (!raw.trim()) return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new ApiError('Extra headers must be a JSON object, e.g. {"api-key": "..."}');
+    throw new ApiError(error);
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new ApiError('Extra headers must be a JSON object');
-  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new ApiError(error);
+  return parsed as Record<string, unknown>;
+}
+
+export function parseExtraHeaders(raw: string): Record<string, string> {
+  const parsed = parseJsonObject(raw, 'Extra headers must be a JSON object, e.g. {"api-key": "..."}');
   return Object.fromEntries(Object.entries(parsed).map(([k, v]) => [k, String(v)]));
 }
 
-function authHeaders(ep: ApiEndpoint): Record<string, string> {
+/** Provider-specific request fields, e.g. {"max_tokens": 512}. */
+export function parseExtraBody(raw: string): Record<string, unknown> {
+  return parseJsonObject(raw, 'Extra body parameters must be a JSON object, e.g. {"max_tokens": 512}');
+}
+
+export function authHeaders(ep: ApiEndpoint): Record<string, string> {
   const headers: Record<string, string> = {};
   if (ep.apiKey.trim()) headers.Authorization = `Bearer ${ep.apiKey.trim()}`;
   return { ...headers, ...parseExtraHeaders(ep.extraHeaders) };
@@ -53,7 +61,7 @@ async function errorMessage(res: Response): Promise<string> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** fetch with a timeout and retries on rate limits, server errors and network failures. */
-async function request(url: string, init: () => RequestInit, timeoutMs: number, attempts = 4): Promise<Response> {
+export async function request(url: string, init: () => RequestInit, timeoutMs: number, attempts = 4): Promise<Response> {
   let lastError: unknown;
   for (let attempt = 0; attempt < attempts; attempt++) {
     const controller = new AbortController();
@@ -116,7 +124,8 @@ export async function transcribe(
       if (opts.prompt?.trim() && format !== 'diarized_json') form.append('prompt', opts.prompt.trim());
       return { method: 'POST', headers: authHeaders(ep), body: form };
     },
-    5 * 60_000,
+    // Self-hosted CPU servers can take about as long as the audio itself; 15 min is also a common proxy limit.
+    15 * 60_000,
   );
   const data = (await res.json()) as {
     text?: string;
@@ -156,13 +165,14 @@ export async function blobToDataUrl(blob: Blob): Promise<string> {
 export async function chat(
   ep: ApiEndpoint,
   messages: ChatMessage[],
-  opts: { json?: boolean; temperature?: string } = {},
+  opts: { json?: boolean; temperature?: string; extraBody?: string } = {},
 ): Promise<string> {
+  const extra = parseExtraBody(opts.extraBody ?? '');
   const send = (json: boolean) =>
     request(
       endpointUrl(ep.baseUrl, '/chat/completions'),
       () => {
-        const body: Record<string, unknown> = { model: ep.model.trim(), messages };
+        const body: Record<string, unknown> = { ...extra, model: ep.model.trim(), messages };
         if (json) body.response_format = { type: 'json_object' };
         const temperature = Number.parseFloat(opts.temperature ?? '');
         if (Number.isFinite(temperature)) body.temperature = temperature;

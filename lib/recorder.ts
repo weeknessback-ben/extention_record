@@ -213,6 +213,7 @@ export class MeetingRecorder {
       this.slides = new SlideCapture(videoTrack, {
         sensitivity: o.settings.slides.sensitivity,
         maxFrames: Math.max(1, o.settings.slides.maxFrames),
+        crop: o.settings.slides.crop,
         elapsed: () => this.elapsed(),
         onFrame: (frame) =>
           this.enqueue(async () => {
@@ -330,8 +331,8 @@ export class MeetingRecorder {
 }
 
 /**
- * Used by the automated end-to-end tests: a "presentation" whose slide
- * changes every 8 s, with a small moving tile like a participant video, plus a tone.
+ * Used by the automated end-to-end tests: a meeting layout with a still interface, a shared "slide"
+ * on the left that changes every 8 s, and a moving participant tile on the right, plus a tone.
  */
 function syntheticStream(): MediaStream {
   const canvas = document.createElement('canvas');
@@ -342,17 +343,19 @@ function syntheticStream(): MediaStream {
   let frame = 0;
   setInterval(() => {
     const slide = Math.floor((performance.now() - started) / 8000) + 1;
-    g.fillStyle = `hsl(${(slide * 67) % 360} 55% 35%)`;
+    g.fillStyle = '#202124';
     g.fillRect(0, 0, canvas.width, canvas.height);
+    g.fillStyle = `hsl(${(slide * 67) % 360} 55% 35%)`;
+    g.fillRect(20, 20, 440, 300);
     g.fillStyle = '#fff';
-    g.font = 'bold 44px sans-serif';
-    g.fillText(`Slide ${slide}`, 40, 110);
-    g.font = '24px sans-serif';
-    g.fillText(`Roadmap item ${slide}: release plan`, 40, 170);
-    g.fillStyle = '#222';
-    g.fillRect(560, 290, 70, 60);
+    g.font = 'bold 40px sans-serif';
+    g.fillText(`Slide ${slide}`, 40, 100);
+    g.font = '22px sans-serif';
+    g.fillText(`Roadmap item ${slide}: release plan`, 40, 160);
+    g.fillStyle = '#3c4043';
+    g.fillRect(480, 20, 140, 100);
     g.fillStyle = '#9cf';
-    g.fillRect(565 + ((frame++ * 2) % 50), 300, 10, 10);
+    g.fillRect(490 + ((frame++ * 2) % 110), 40 + ((frame * 3) % 60), 16, 16);
   }, 1000 / 30);
   const video = canvas.captureStream(30);
   const ctx = new AudioContext();

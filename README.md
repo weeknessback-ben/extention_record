@@ -107,6 +107,8 @@ apakah model itu benar-benar bisa membaca gambar.
 | Maks. karakter per permintaan | 120.000 | Transkrip lebih panjang dirangkum per bagian lalu digabung (map-reduce) |
 | Vision – Model | kosong | Kosong = model rangkuman (hanya bila memakai API yang sama). Harus bisa menerima gambar (`gpt-4.1-mini`, `gpt-4.1`, `gpt-4o`, `gpt-5-mini`, …) |
 | Vision – Detail gambar | `auto` | `high` lebih baik membaca teks kecil, `low` lebih hemat token |
+| Vision – Gambar per permintaan | 6 | Turunkan (misalnya 1) untuk model kecil atau server self-hosted yang lambat |
+| Vision – Parameter body tambahan | kosong | JSON yang ditambahkan ke setiap permintaan vision, misalnya `{"max_tokens": 512}` |
 | Header tambahan | kosong | JSON, misalnya `{"api-key": "…"}` untuk Azure atau `{"HTTP-Referer": "…"}` untuk OpenRouter |
 | Bahasa notulen | kosong | Kosong = bahasa utama meeting. Bisa diisi bahasa apa saja: `English`, `Bahasa Indonesia`, `日本語`, … |
 | Tangkapan layar presentasi | aktif | Diambil saat layar berganti lalu diam; area yang terus bergerak (video peserta, video yang diputar, scroll) diabaikan |
@@ -119,6 +121,31 @@ Untuk server selain `api.openai.com`, Chrome meminta izin akses ke domain terseb
 
 **Template**: Notulen rapat lengkap, Daily stand-up, Kuliah/kelas/webinar, Wawancara klien, Sales call,
 Brainstorming/workshop. Ditambah kolom **Instruksi tambahan** untuk aturan Anda sendiri.
+
+## Pemrosesan di server + Telegram
+
+Sebagai ganti memproses di browser, ekstensi bisa mengunggah **audio dan tangkapan layar** ke server Anda sendiri
+([`server/`](server/README.md)). Server menjalankan pipeline yang sama, lalu mengirim notulen ke **Telegram**: pesan
+ringkasan, album gambar slide, dan `minutes.pdf`. Browser boleh ditutup setelah unggahan selesai. Video tetap disimpan
+di komputer ini, dan notulennya juga dikirim balik ke ekstensi (halaman Rekaman dan notulen tetap berfungsi).
+
+Aktifkan di **Pengaturan → Pemrosesan → Server**: isi base URL server (misalnya `https://<domain>/meeting`) dan API key,
+lalu klik **Tes koneksi**. API transkripsi, vision, dan rangkuman diatur di `.env` server; bahasa, kosakata, bahasa
+notulen, template, dan jumlah gambar per topik tetap diambil dari Pengaturan ekstensi. Dalam mode server, kartu API
+lokal disembunyikan.
+
+**Chat Telegram**: kosongkan agar notulen masuk ke chat default server (`TELEGRAM_CHAT_ID`), atau isi chat ID sendiri.
+Kirim `/start` ke bot (atau masukkan bot ke grup), lalu klik **Cari chat** dan pilih chatnya.
+
+**Isi otomatis saat build**: buat `.env.production.local` (tidak masuk git) berisi pengaturan awal dalam JSON, misalnya
+
+```bash
+WXT_DEFAULT_SETTINGS='{"processing":"server","server":{"baseUrl":"https://<domain>/meeting","apiKey":"mtg_…","telegramChatId":""},"uiLanguage":"id","transcription":{"language":"id"},"slides":{"sensitivity":"low","maxFrames":40}}'
+```
+
+lalu `npm run build` atau `npm run zip`. Ekstensi hasil build langsung siap pakai; pengaturan yang sudah pernah disimpan
+tetap dipakai, dan tombol **Kembalikan ke default build** mengembalikan mode, URL, key, dan chat dari build. File ini
+tidak dibaca oleh `npm run dev` maupun build e2e.
 
 ## Arsitektur
 
@@ -155,7 +182,7 @@ Beberapa keputusan desain:
 - **Audio tab diputar ulang ke speaker**: Chrome membisukan tab yang direkam; ekstensi mengembalikan suaranya.
 - **PDF via mesin cetak Chrome** (bukan library JS) supaya semua aksara dan teks kanan-ke-kiri tampil benar.
 - **Gambar dipilih dalam dua tahap**: model vision membaca setiap tangkapan layar (jenis, teks yang terlihat, skor
-  kegunaan 0–10) dalam batch berisi 6 gambar. Model rangkuman lalu memilih gambar per topik berdasarkan waktu dan isinya.
+  kegunaan 0–10) dalam batch berisi 6 gambar (bisa diatur). Model rangkuman lalu memilih gambar per topik berdasarkan waktu dan isinya.
   Hasil baca gambar disimpan, jadi "Rangkum ulang" tidak membaca ulang gambar.
 - **Data tersimpan bertahap ke IndexedDB** setiap beberapa detik, jadi rekaman panjang tidak memenuhi RAM dan bisa
   dipulihkan kalau browser crash.
@@ -190,6 +217,8 @@ npm run compile    # cek TypeScript
 npm test           # unit test (Vitest)
 npm run test:e2e   # uji end-to-end di Chromium (Playwright) dengan server API tiruan
 npm run zip        # paket .zip
+npm run build:server     # server pemrosesan → server/dist/server.mjs
+npm run test:e2e:server  # uji end-to-end mode server (ekstensi + server + Telegram tiruan)
 ```
 
 `npm run test:e2e` membangun varian khusus (`--mode e2e`) yang bisa merekam stream sintetis, lalu memuatnya di Chromium,

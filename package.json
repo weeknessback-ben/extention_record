@@ -8,10 +8,13 @@
     "dev": "wxt",
     "build": "wxt build",
     "build:e2e": "wxt build --mode e2e",
+    "build:server": "node server/build.mjs",
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build:e2e && node tests/e2e/run.mjs",
+    "test:e2e:server": "npm run build:e2e && npm run build:server && node tests/e2e/server.mjs",
+    "qa:replay": "esbuild tests/qa/replay.ts --bundle --platform=node --format=esm --tsconfig=tsconfig.json --outfile=tests/qa/.build/replay.mjs --log-level=warning && node tests/qa/.build/replay.mjs",
     "postinstall": "wxt prepare",
     "format": "prettier --write \"{entrypoints,lib,components,tests}/**/*.{ts,tsx,mjs,css}\" \"*.{ts,json}\""
   },
@@ -21,12 +24,15 @@
     "react-dom": "^19.2.4"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@wxt-dev/module-react": "^1.1.5",
+    "esbuild": "^0.28.2",
     "playwright": "^1.56.1",
     "prettier": "^3.8.1",
     "typescript": "^5.9.3",
+    "undici": "^6.29.1",
     "vitest": "^5.0.5",
     "wxt": "^0.21.3"
   }

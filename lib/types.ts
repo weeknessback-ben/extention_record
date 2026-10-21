@@ -4,6 +4,10 @@ export type RecordingStatus =
   | 'recording'
   | 'saving'
   | 'recorded'
+  /** Sending audio and screenshots to the processing server. */
+  | 'uploading'
+  /** Waiting for its turn on the processing server. */
+  | 'queued'
   | 'transcribing'
   | 'analyzing'
   | 'summarizing'
@@ -39,7 +43,7 @@ export interface VideoFileInfo {
 }
 
 export interface Progress {
-  stage: 'saving' | 'transcribing' | 'analyzing' | 'summarizing';
+  stage: 'saving' | 'uploading' | 'transcribing' | 'analyzing' | 'summarizing';
   done: number;
   total: number;
 }
@@ -76,6 +80,19 @@ export interface Recording {
   summaryModel?: string;
   processedAt?: number;
   pdf?: { filename: string; savedAt: number };
+  /** Set once the recording was sent to a processing server. */
+  server?: ServerJob;
+}
+
+export type TelegramStatus = 'off' | 'pending' | 'sending' | 'sent' | 'failed';
+
+export interface ServerJob {
+  /** Meeting id on the server. */
+  id: string;
+  baseUrl: string;
+  uploadedAudio: number[];
+  uploadedFrames: number[];
+  telegram?: TelegramStatus;
 }
 
 export type FrameKind =

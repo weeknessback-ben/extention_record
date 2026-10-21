@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { summaryToMarkdown } from '@/lib/format';
 import { finalizeImages, visualItems } from '@/lib/pipeline';
 import { finalSystemPrompt, finalUserPrompt, normalizeFrameAnalyses, normalizeSummary } from '@/lib/prompts';
-import { ChangeDetector, changedRatio, THUMB_HEIGHT, THUMB_WIDTH } from '@/lib/slides';
+import { ChangeDetector, changedRatio, cropBox, THUMB_HEIGHT, THUMB_WIDTH } from '@/lib/slides';
 import type { FrameRecord, Recording } from '@/lib/types';
 
 const frame = (id: number, t: number, useful: number, text = '', kind: 'slide' | 'people' = 'slide'): FrameRecord => ({
@@ -112,6 +112,28 @@ describe('ChangeDetector', () => {
     const stamps = frames.map((f, i) => detector.push(f, i * 2000)).filter((s) => s !== undefined);
     expect(stamps).toEqual([2000]);
   });
+  it('remembers where the shared content changes, for cropping the screenshots', () => {
+    /** A slide area (x 20-99, y 10-69) whose content changes, beside a participant tile with live video. */
+    const meeting = (slide: number) => {
+      const g = new Uint8Array(THUMB_WIDTH * THUMB_HEIGHT).fill(230);
+      for (let y = 0; y < THUMB_HEIGHT; y++) {
+        for (let x = 0; x < THUMB_WIDTH; x++) {
+          if (x >= 20 && x < 100 && y >= 10 && y < 70) g[y * THUMB_WIDTH + x] = (x + y) % 7 ? slide : 255 - slide;
+          if (x >= 130 && y >= 60) g[y * THUMB_WIDTH + x] = random();
+        }
+      }
+      return g;
+    };
+    const detector = new ChangeDetector(0.05);
+    [...Array(4).fill(200), ...Array(4).fill(60), ...Array(4).fill(130)].forEach((v, i) => detector.push(meeting(v), i * 2000));
+    // Whole 4x4 blocks: the slide covers rows 10-69, so its blocks span rows 8-71.
+    expect(detector.region).toEqual({ x: 20, y: 8, w: 80, h: 64 });
+    // Scaled to a 1280x720 frame with a margin of one thumbnail pixel.
+    expect(cropBox(detector.region, 1280, 720)).toEqual({ x: 152, y: 56, w: 656, h: 528 });
+    // A small change (one new line) is no reason to crop.
+    expect(cropBox({ x: 10, y: 30, w: 50, h: 20 }, 1280, 720)).toBeUndefined();
+    expect(cropBox(undefined, 1280, 720)).toBeUndefined();
+  });
 });
 
 describe('normalizeFrameAnalyses', () => {
@@ -126,6 +148,19 @@ describe('normalizeFrameAnalyses', () => {
     expect(map.get(3)).toEqual({ kind: 'slide', useful: 10, caption: 'Roadmap', text: 'Q4 • Beta' });
     expect(map.get(4)).toEqual({ kind: 'other', useful: 2, caption: '', text: '' });
     expect(map.size).toBe(2);
+  });
+
+  it('accepts a single image under a wrong id or without the wrapper', () => {
+    expect(normalizeFrameAnalyses({ images: [{ id: 1, kind: 'chart', useful: 7 }, { id: 2 }] }, 5)).toEqual(
+      new Map([[5, { kind: 'chart', useful: 7, caption: '', text: '' }]]),
+    );
+    expect(normalizeFrameAnalyses({ kind: 'slide', useful: 6, caption: 'Agenda', text: 'Q4' }, 5).get(5)).toEqual({
+      kind: 'slide',
+      useful: 6,
+      caption: 'Agenda',
+      text: 'Q4',
+    });
+    expect(normalizeFrameAnalyses({ images: [] }, 5).size).toBe(0);
   });
 });
 

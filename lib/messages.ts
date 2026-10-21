@@ -12,6 +12,7 @@ export type BackgroundMessage =
   | { type: 'download'; url: string; filename: string; saveAs: boolean; conflictAction: 'uniquify' | 'overwrite' }
   | { type: 'recorder-stopped'; recId: string; reason: string }
   | { type: 'pipeline-finished'; recId: string; ok: boolean; error?: string }
+  | { type: 'uploaded'; recId: string }
   | { type: 'e2e-start'; title: string; recordMic: boolean; tabId: number };
 
 export interface BackgroundState {

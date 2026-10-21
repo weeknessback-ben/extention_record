@@ -4,8 +4,19 @@ import { blobToDataUrl, chat, parseJsonLoose, silentWav, transcribe } from '@/li
 import { sanitizeFolder } from '@/lib/files';
 import { setUiLanguage, t, type I18nKey } from '@/lib/i18n';
 import { normalizeFrameAnalyses, TEMPLATES, VISION_SYSTEM_PROMPT } from '@/lib/prompts';
-import { getSettings, saveSettings, summaryEndpoint, visionEndpoint, type Settings } from '@/lib/settings';
+import type { EndpointHealth, TelegramChat } from '@/lib/server-api';
+import {
+  BUILD_DEFAULTS,
+  DEFAULT_SETTINGS,
+  getSettings,
+  isTelegramChatId,
+  saveSettings,
+  summaryEndpoint,
+  visionEndpoint,
+  type Settings,
+} from '@/lib/settings';
 import type { TemplateId } from '@/lib/types';
+import { serverHealth, telegramChats } from '@/lib/upload';
 import { useMicPermission } from '@/components/hooks';
 
 const TRANSCRIPTION_MODELS = ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'gpt-4o-transcribe-diarize', 'whisper-1'];
@@ -40,6 +51,8 @@ const LANGUAGES = [
   'Svenska',
 ];
 const OPENAI_ORIGIN = 'https://api.openai.com';
+/** This build carries a processing server (WXT_DEFAULT_SETTINGS in .env.production.local). */
+const hasBuildServer = Boolean(BUILD_DEFAULTS.server?.baseUrl);
 
 function Field(props: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
@@ -92,7 +105,9 @@ function originPattern(url: string): string | null {
 function requestHostAccess(s: Settings): Promise<string[]> {
   const origins = [
     ...new Set(
-      [s.transcription.baseUrl, summaryEndpoint(s).baseUrl, visionEndpoint(s).baseUrl].map(originPattern).filter(Boolean),
+      [s.server.baseUrl, s.transcription.baseUrl, summaryEndpoint(s).baseUrl, visionEndpoint(s).baseUrl]
+        .map(originPattern)
+        .filter(Boolean),
     ),
   ] as string[];
   if (!origins.length) return Promise.resolve([]);
@@ -118,7 +133,7 @@ async function testSlide(): Promise<Blob> {
   return canvas.convertToBlob({ type: 'image/png' });
 }
 
-function TestButton(props: { run: () => Promise<string | void> }) {
+function TestButton(props: { run: () => Promise<string | void>; describe?: (detail: string) => string }) {
   const [state, setState] = useState<TestState>({ status: 'idle' });
   const onClick = async () => {
     setState({ status: 'running' });
@@ -136,7 +151,9 @@ function TestButton(props: { run: () => Promise<string | void> }) {
       </button>
       {state.status === 'ok' && (
         <span className="banner ok small">
-          {state.message ? t('options.testOkRead', { text: state.message }) : t('options.testOk')}
+          {state.message
+            ? (props.describe?.(state.message) ?? t('options.testOkRead', { text: state.message }))
+            : t('options.testOk')}
         </span>
       )}
       {state.status === 'error' && (
@@ -153,6 +170,8 @@ export default function App() {
   const [, setLang] = useState('');
   const mic = useMicPermission();
   const [micError, setMicError] = useState('');
+  const [chats, setChats] = useState<TelegramChat[] | null>(null);
+  const [chatError, setChatError] = useState('');
 
   useEffect(() => {
     void getSettings().then((s) => {
@@ -176,6 +195,11 @@ export default function App() {
   const updateVision = (patch: Partial<Settings['vision']>) => update({ vision: { ...s.vision, ...patch } });
 
   function save() {
+    const chatId = s.server.telegramChatId.trim();
+    if (chatId && !isTelegramChatId(chatId)) {
+      setMessage({ kind: 'error', text: t('options.telegramChatInvalid', { id: chatId }) });
+      return;
+    }
     // Permission prompt first, while the click still counts as a user gesture.
     const pending = requestHostAccess(s);
     void pending.then(async (denied) => {
@@ -189,6 +213,8 @@ export default function App() {
           maxFrames: Math.min(500, Math.max(1, Math.round(s.slides.maxFrames) || 150)),
           perTopic: Math.min(4, Math.max(0, Math.round(s.slides.perTopic) || 0)),
         },
+        vision: { ...s.vision, batchSize: Math.min(10, Math.max(1, Math.round(s.vision.batchSize) || 6)) },
+        server: { baseUrl: s.server.baseUrl.trim(), apiKey: s.server.apiKey.trim(), telegramChatId: chatId },
       };
       await saveSettings(cleaned);
       setSettings(cleaned);
@@ -201,6 +227,23 @@ export default function App() {
     });
   }
 
+  async function findChats() {
+    setChatError('');
+    setChats(null);
+    try {
+      await requestHostAccess(s);
+      setChats(await telegramChats(s));
+    } catch (err) {
+      setChatError((err as Error).message);
+    }
+  }
+
+  /** Puts back the processing choices baked into this build (.env.production.local). */
+  function restoreBuildDefaults() {
+    update({ processing: DEFAULT_SETTINGS.processing, server: { ...DEFAULT_SETTINGS.server } });
+    setMessage({ kind: 'ok', text: t('options.buildDefaultsApplied') });
+  }
+
   async function grantMic() {
     setMicError('');
     try {
@@ -211,6 +254,30 @@ export default function App() {
     }
   }
 
+  const testServer = async () => {
+    await requestHostAccess(s);
+    const h = await serverHealth(s);
+    const state = (e: EndpointHealth) =>
+      !e.configured
+        ? t('options.healthMissing')
+        : e.reachable === false
+          ? t('options.healthDown')
+          : e.model
+            ? t('options.healthOkModel', { model: e.model })
+            : t('options.healthOk');
+    const tg = h.telegram;
+    const telegram = tg.error
+      ? tg.error
+      : !tg.bot
+        ? t('options.healthMissing')
+        : `@${tg.bot} → ${tg.configured ? (tg.chat ?? '') : t('options.healthNoChat')}`;
+    const text = t('options.serverHealth', { stt: state(h.stt), vision: state(h.vision), summary: state(h.summary), telegram });
+    if (!h.ok) {
+      const missing = [!h.stt.configured && 'STT', !h.summary.configured && 'SUMMARY'].filter(Boolean).join(', ');
+      throw new Error(`${t('options.serverIncomplete', { missing })} — ${text}`);
+    }
+    return text;
+  };
   const testTranscription = async () => {
     await requestHostAccess(s);
     await transcribe(s.transcription, silentWav(), { filename: 'test.wav' });
@@ -241,9 +308,9 @@ export default function App() {
           ],
         },
       ],
-      { json: s.vision.jsonMode, temperature: s.vision.temperature },
+      { json: s.vision.jsonMode, temperature: s.vision.temperature, extraBody: s.vision.extraBody },
     );
-    const analysis = normalizeFrameAnalyses(parseJsonLoose(reply)).get(1);
+    const analysis = normalizeFrameAnalyses(parseJsonLoose(reply), 1).get(1);
     if (!analysis) throw new Error('The reply did not describe the test image');
     return analysis.text || analysis.caption;
   };
@@ -265,7 +332,7 @@ export default function App() {
         <h2>{t('options.welcome')}</h2>
         <ol>
           <li>{t('options.step1')}</li>
-          <li>{t('options.step2')}</li>
+          <li>{t(s.processing === 'server' ? 'options.step2Server' : 'options.step2')}</li>
           <li>{t('options.step3')}</li>
         </ol>
         {mic === 'granted' ? (
@@ -283,240 +350,303 @@ export default function App() {
       </section>
 
       <section className="card stack">
-        <h2>{t('options.section.storage')}</h2>
-        <Field label={t('options.folder')} hint={t('options.folderHint')}>
-          <input type="text" value={s.folder} onChange={(e) => update({ folder: e.target.value })} />
+        <h2>{t('options.section.processing')}</h2>
+        <div className="small muted">{t('options.processingIntro')}</div>
+        <Field label={t('options.processingMode')}>
+          <select value={s.processing} onChange={(e) => update({ processing: e.target.value as Settings['processing'] })}>
+            <option value="local">{t('options.processing.local')}</option>
+            <option value="server">{t('options.processing.server')}</option>
+          </select>
         </Field>
-        <Check label={t('options.askWhere')} checked={s.askWhereToSave} onChange={(v) => update({ askWhereToSave: v })} />
+        {s.processing === 'server' && (
+          <>
+            <div className="grid2">
+              <Field label={t('options.serverUrl')} hint={t('options.serverUrlHint')}>
+                <input
+                  type="url"
+                  placeholder="https://…/meeting"
+                  value={s.server.baseUrl}
+                  onChange={(e) => update({ server: { ...s.server, baseUrl: e.target.value } })}
+                />
+              </Field>
+              <Field label={t('options.apiKey')}>
+                <Secret value={s.server.apiKey} onChange={(v) => update({ server: { ...s.server, apiKey: v } })} />
+              </Field>
+            </div>
+            <Field label={t('options.telegramChat')} hint={t('options.telegramChatHint')}>
+              <span className="secret">
+                <input
+                  type="text"
+                  placeholder="123456789"
+                  value={s.server.telegramChatId}
+                  onChange={(e) => update({ server: { ...s.server, telegramChatId: e.target.value } })}
+                />
+                <button type="button" className="small" onClick={findChats}>
+                  {t('options.findChat')}
+                </button>
+              </span>
+            </Field>
+            {chats && (
+              <div className="row">
+                {chats.length ? (
+                  chats.map((c) => (
+                    <button
+                      type="button"
+                      className="small"
+                      key={c.id}
+                      onClick={() => update({ server: { ...s.server, telegramChatId: c.id } })}
+                    >
+                      {c.title || c.id} · {c.id}
+                    </button>
+                  ))
+                ) : (
+                  <span className="banner warn small">{t('options.findChatNone')}</span>
+                )}
+              </div>
+            )}
+            {chatError && <div className="banner error small">{t('options.testFailed', { error: chatError })}</div>}
+            <div className="banner warn small">{t('options.serverMode')}</div>
+            <TestButton run={testServer} describe={(detail) => detail} />
+          </>
+        )}
+        {hasBuildServer && (
+          <div>
+            <button type="button" className="small" onClick={restoreBuildDefaults}>
+              {t('options.useBuildDefaults')}
+            </button>
+          </div>
+        )}
       </section>
 
-      <section className="card stack">
-        <h2>{t('options.section.recording')}</h2>
-        <div className="grid2">
-          <Field label={t('options.resolution')}>
-            <select
-              value={s.videoResolution}
-              onChange={(e) => update({ videoResolution: e.target.value as Settings['videoResolution'] })}
-            >
-              <option value="480p">480p</option>
-              <option value="720p">720p (HD)</option>
-              <option value="1080p">1080p (Full HD)</option>
-            </select>
-          </Field>
-          <Field label={t('options.fps')}>
-            <select value={s.videoFps} onChange={(e) => update({ videoFps: Number(e.target.value) as Settings['videoFps'] })}>
-              <option value={15}>15</option>
-              <option value={30}>30</option>
-            </select>
-          </Field>
-          <Field label={t('options.bitrate')}>
-            <input
-              type="number"
-              min={0}
-              step={100}
-              value={s.videoBitrateKbps}
-              onChange={(e) => update({ videoBitrateKbps: Number(e.target.value) })}
+      {s.processing === 'local' && (
+        <>
+          <section className="card stack">
+            <h2>{t('options.section.transcription')}</h2>
+            <Field label={t('options.baseUrl')} hint={t('options.baseUrlHint')}>
+              <input
+                type="url"
+                value={s.transcription.baseUrl}
+                onChange={(e) => updateTranscription({ baseUrl: e.target.value })}
+              />
+            </Field>
+            <div className="grid2">
+              <Field label={t('options.apiKey')}>
+                <Secret value={s.transcription.apiKey} onChange={(v) => updateTranscription({ apiKey: v })} />
+              </Field>
+              <Field label={t('options.model')}>
+                <input
+                  type="text"
+                  list="transcription-models"
+                  value={s.transcription.model}
+                  onChange={(e) => updateTranscription({ model: e.target.value })}
+                />
+                <datalist id="transcription-models">
+                  {TRANSCRIPTION_MODELS.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </Field>
+            </div>
+            <div className="hint small muted">{t('options.transcriptionModelHint')}</div>
+            <Field label={t('options.extraHeaders')} hint={t('options.extraHeadersHint')}>
+              <input
+                type="text"
+                placeholder="{}"
+                value={s.transcription.extraHeaders}
+                onChange={(e) => updateTranscription({ extraHeaders: e.target.value })}
+              />
+            </Field>
+            <TestButton run={testTranscription} />
+          </section>
+
+          <section className="card stack">
+            <h2>{t('options.section.summary')}</h2>
+            <Check
+              label={t('options.sameAsTranscription')}
+              checked={s.summary.sameAsTranscription}
+              onChange={(v) => updateSummary({ sameAsTranscription: v })}
             />
-          </Field>
-          <Field label={t('options.segment')} hint={t('options.segmentHint')}>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={s.segmentMinutes}
-              onChange={(e) => update({ segmentMinutes: Number(e.target.value) })}
+            {!s.summary.sameAsTranscription && (
+              <>
+                <Field label={t('options.baseUrl')}>
+                  <input type="url" value={s.summary.baseUrl} onChange={(e) => updateSummary({ baseUrl: e.target.value })} />
+                </Field>
+                <div className="grid2">
+                  <Field label={t('options.apiKey')}>
+                    <Secret value={s.summary.apiKey} onChange={(v) => updateSummary({ apiKey: v })} />
+                  </Field>
+                  <Field label={t('options.extraHeaders')}>
+                    <input
+                      type="text"
+                      placeholder="{}"
+                      value={s.summary.extraHeaders}
+                      onChange={(e) => updateSummary({ extraHeaders: e.target.value })}
+                    />
+                  </Field>
+                </div>
+              </>
+            )}
+            <div className="grid2">
+              <Field label={t('options.model')} hint={t('options.summaryModelHint')}>
+                <input
+                  type="text"
+                  list="summary-models"
+                  value={s.summary.model}
+                  onChange={(e) => updateSummary({ model: e.target.value })}
+                />
+                <datalist id="summary-models">
+                  {SUMMARY_MODELS.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </Field>
+              <Field label={t('options.temperature')}>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="—"
+                  value={s.summary.temperature}
+                  onChange={(e) => updateSummary({ temperature: e.target.value })}
+                />
+              </Field>
+              <Field label={t('options.maxChars')} hint={t('options.maxCharsHint')}>
+                <input
+                  type="number"
+                  min={4000}
+                  step={1000}
+                  value={s.summary.maxCharsPerRequest}
+                  onChange={(e) => updateSummary({ maxCharsPerRequest: Number(e.target.value) })}
+                />
+              </Field>
+            </div>
+            <Check label={t('options.jsonMode')} checked={s.summary.jsonMode} onChange={(v) => updateSummary({ jsonMode: v })} />
+            <TestButton run={testSummary} />
+          </section>
+
+          <section className="card stack">
+            <h2>{t('options.section.vision')}</h2>
+            <div className="small muted">{t('options.visionIntro')}</div>
+            {!s.slides.analyze && <div className="banner warn">{t('options.visionDisabled')}</div>}
+            <Check
+              label={t('options.sameAsSummary')}
+              checked={s.vision.sameAsSummary}
+              onChange={(v) => updateVision({ sameAsSummary: v })}
             />
-          </Field>
-        </div>
-        <Check label={t('options.recordMic')} checked={s.recordMic} onChange={(v) => update({ recordMic: v })} />
-      </section>
+            {!s.vision.sameAsSummary && (
+              <>
+                <Field label={t('options.baseUrl')} hint={t('options.baseUrlHint')}>
+                  <input type="url" value={s.vision.baseUrl} onChange={(e) => updateVision({ baseUrl: e.target.value })} />
+                </Field>
+                <div className="grid2">
+                  <Field label={t('options.apiKey')}>
+                    <Secret value={s.vision.apiKey} onChange={(v) => updateVision({ apiKey: v })} />
+                  </Field>
+                  <Field label={t('options.extraHeaders')} hint={t('options.extraHeadersHint')}>
+                    <input
+                      type="text"
+                      placeholder="{}"
+                      value={s.vision.extraHeaders}
+                      onChange={(e) => updateVision({ extraHeaders: e.target.value })}
+                    />
+                  </Field>
+                </div>
+              </>
+            )}
+            <div className="grid2">
+              <Field
+                label={t('options.model')}
+                hint={s.vision.sameAsSummary ? t('options.visionModelHintSame') : t('options.visionModelHint')}
+              >
+                <input
+                  type="text"
+                  list="vision-models"
+                  placeholder={s.vision.sameAsSummary ? s.summary.model : ''}
+                  value={s.vision.model}
+                  onChange={(e) => updateVision({ model: e.target.value })}
+                />
+                <datalist id="vision-models">
+                  {VISION_MODELS.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </Field>
+              <Field label={t('options.slidesDetail')} hint={t('options.slidesDetailHint')}>
+                <select
+                  value={s.vision.detail}
+                  onChange={(e) => updateVision({ detail: e.target.value as Settings['vision']['detail'] })}
+                >
+                  <option value="auto">auto</option>
+                  <option value="low">low</option>
+                  <option value="high">high</option>
+                </select>
+              </Field>
+              <Field label={t('options.temperature')}>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="—"
+                  value={s.vision.temperature}
+                  onChange={(e) => updateVision({ temperature: e.target.value })}
+                />
+              </Field>
+              <Field label={t('options.visionBatch')} hint={t('options.visionBatchHint')}>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={s.vision.batchSize}
+                  onChange={(e) => updateVision({ batchSize: Number(e.target.value) })}
+                />
+              </Field>
+            </div>
+            <Field label={t('options.extraBody')} hint={t('options.extraBodyHint')}>
+              <input
+                type="text"
+                placeholder='{"max_tokens": 512}'
+                value={s.vision.extraBody}
+                onChange={(e) => updateVision({ extraBody: e.target.value })}
+              />
+            </Field>
+            <Check label={t('options.jsonMode')} checked={s.vision.jsonMode} onChange={(v) => updateVision({ jsonMode: v })} />
+            <TestButton run={testVision} />
+          </section>
+        </>
+      )}
 
       <section className="card stack">
-        <h2>{t('options.section.transcription')}</h2>
-        <Field label={t('options.baseUrl')} hint={t('options.baseUrlHint')}>
-          <input type="url" value={s.transcription.baseUrl} onChange={(e) => updateTranscription({ baseUrl: e.target.value })} />
+        <h2>{t('options.section.meetingLanguage')}</h2>
+        <div className="small muted">{t('options.meetingLanguageIntro')}</div>
+        <Field label={t('options.language')} hint={t('options.languageHint')}>
+          <input
+            type="text"
+            placeholder="auto"
+            value={s.transcription.language}
+            onChange={(e) => updateTranscription({ language: e.target.value })}
+          />
         </Field>
-        <div className="grid2">
-          <Field label={t('options.apiKey')}>
-            <Secret value={s.transcription.apiKey} onChange={(v) => updateTranscription({ apiKey: v })} />
-          </Field>
-          <Field label={t('options.model')}>
-            <input
-              type="text"
-              list="transcription-models"
-              value={s.transcription.model}
-              onChange={(e) => updateTranscription({ model: e.target.value })}
-            />
-            <datalist id="transcription-models">
-              {TRANSCRIPTION_MODELS.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          </Field>
-        </div>
-        <div className="hint small muted">{t('options.transcriptionModelHint')}</div>
-        <div className="grid2">
-          <Field label={t('options.language')} hint={t('options.languageHint')}>
-            <input
-              type="text"
-              placeholder="auto"
-              value={s.transcription.language}
-              onChange={(e) => updateTranscription({ language: e.target.value })}
-            />
-          </Field>
-          <Field label={t('options.extraHeaders')} hint={t('options.extraHeadersHint')}>
-            <input
-              type="text"
-              placeholder="{}"
-              value={s.transcription.extraHeaders}
-              onChange={(e) => updateTranscription({ extraHeaders: e.target.value })}
-            />
-          </Field>
-        </div>
         <Field label={t('options.vocabulary')}>
           <textarea value={s.transcription.vocabulary} onChange={(e) => updateTranscription({ vocabulary: e.target.value })} />
         </Field>
-        <TestButton run={testTranscription} />
-      </section>
-
-      <section className="card stack">
-        <h2>{t('options.section.summary')}</h2>
-        <Check
-          label={t('options.sameAsTranscription')}
-          checked={s.summary.sameAsTranscription}
-          onChange={(v) => updateSummary({ sameAsTranscription: v })}
-        />
-        {!s.summary.sameAsTranscription && (
-          <>
-            <Field label={t('options.baseUrl')}>
-              <input type="url" value={s.summary.baseUrl} onChange={(e) => updateSummary({ baseUrl: e.target.value })} />
-            </Field>
-            <div className="grid2">
-              <Field label={t('options.apiKey')}>
-                <Secret value={s.summary.apiKey} onChange={(v) => updateSummary({ apiKey: v })} />
-              </Field>
-              <Field label={t('options.extraHeaders')}>
-                <input
-                  type="text"
-                  placeholder="{}"
-                  value={s.summary.extraHeaders}
-                  onChange={(e) => updateSummary({ extraHeaders: e.target.value })}
-                />
-              </Field>
-            </div>
-          </>
-        )}
-        <div className="grid2">
-          <Field label={t('options.model')} hint={t('options.summaryModelHint')}>
-            <input
-              type="text"
-              list="summary-models"
-              value={s.summary.model}
-              onChange={(e) => updateSummary({ model: e.target.value })}
-            />
-            <datalist id="summary-models">
-              {SUMMARY_MODELS.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          </Field>
-          <Field label={t('options.temperature')}>
-            <input
-              type="text"
-              inputMode="decimal"
-              placeholder="—"
-              value={s.summary.temperature}
-              onChange={(e) => updateSummary({ temperature: e.target.value })}
-            />
-          </Field>
-          <Field label={t('options.maxChars')} hint={t('options.maxCharsHint')}>
-            <input
-              type="number"
-              min={4000}
-              step={1000}
-              value={s.summary.maxCharsPerRequest}
-              onChange={(e) => updateSummary({ maxCharsPerRequest: Number(e.target.value) })}
-            />
-          </Field>
-        </div>
-        <Check label={t('options.jsonMode')} checked={s.summary.jsonMode} onChange={(v) => updateSummary({ jsonMode: v })} />
-        <TestButton run={testSummary} />
-      </section>
-
-      <section className="card stack">
-        <h2>{t('options.section.vision')}</h2>
-        <div className="small muted">{t('options.visionIntro')}</div>
-        {!s.slides.analyze && <div className="banner warn">{t('options.visionDisabled')}</div>}
-        <Check
-          label={t('options.sameAsSummary')}
-          checked={s.vision.sameAsSummary}
-          onChange={(v) => updateVision({ sameAsSummary: v })}
-        />
-        {!s.vision.sameAsSummary && (
-          <>
-            <Field label={t('options.baseUrl')} hint={t('options.baseUrlHint')}>
-              <input type="url" value={s.vision.baseUrl} onChange={(e) => updateVision({ baseUrl: e.target.value })} />
-            </Field>
-            <div className="grid2">
-              <Field label={t('options.apiKey')}>
-                <Secret value={s.vision.apiKey} onChange={(v) => updateVision({ apiKey: v })} />
-              </Field>
-              <Field label={t('options.extraHeaders')} hint={t('options.extraHeadersHint')}>
-                <input
-                  type="text"
-                  placeholder="{}"
-                  value={s.vision.extraHeaders}
-                  onChange={(e) => updateVision({ extraHeaders: e.target.value })}
-                />
-              </Field>
-            </div>
-          </>
-        )}
-        <div className="grid2">
-          <Field
-            label={t('options.model')}
-            hint={s.vision.sameAsSummary ? t('options.visionModelHintSame') : t('options.visionModelHint')}
-          >
-            <input
-              type="text"
-              list="vision-models"
-              placeholder={s.vision.sameAsSummary ? s.summary.model : ''}
-              value={s.vision.model}
-              onChange={(e) => updateVision({ model: e.target.value })}
-            />
-            <datalist id="vision-models">
-              {VISION_MODELS.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          </Field>
-          <Field label={t('options.slidesDetail')} hint={t('options.slidesDetailHint')}>
-            <select
-              value={s.vision.detail}
-              onChange={(e) => updateVision({ detail: e.target.value as Settings['vision']['detail'] })}
-            >
-              <option value="auto">auto</option>
-              <option value="low">low</option>
-              <option value="high">high</option>
-            </select>
-          </Field>
-          <Field label={t('options.temperature')}>
-            <input
-              type="text"
-              inputMode="decimal"
-              placeholder="—"
-              value={s.vision.temperature}
-              onChange={(e) => updateVision({ temperature: e.target.value })}
-            />
-          </Field>
-        </div>
-        <Check label={t('options.jsonMode')} checked={s.vision.jsonMode} onChange={(v) => updateVision({ jsonMode: v })} />
-        <TestButton run={testVision} />
       </section>
 
       <section className="card stack">
         <h2>{t('options.section.slides')}</h2>
+        {s.processing === 'server' && (
+          <div className="banner warn small">
+            {t('options.slidesServerHint')}{' '}
+            <button
+              type="button"
+              className="small"
+              onClick={() => updateSlides({ sensitivity: 'low', maxFrames: Math.min(s.slides.maxFrames, 40) })}
+            >
+              {t('options.applyRecommended')}
+            </button>
+          </div>
+        )}
         <Check label={t('options.slidesCapture')} checked={s.slides.capture} onChange={(v) => updateSlides({ capture: v })} />
+        {s.slides.capture && (
+          <Check label={t('options.slidesCrop')} checked={s.slides.crop} onChange={(v) => updateSlides({ crop: v })} />
+        )}
         {s.slides.capture && (
           <div className="grid2">
             <Field label={t('options.slidesSensitivity')} hint={t('options.slidesSensitivityHint')}>
@@ -588,12 +718,62 @@ export default function App() {
         </Field>
         <Check label={t('options.autoProcess')} checked={s.autoProcess} onChange={(v) => update({ autoProcess: v })} />
         <Check label={t('options.autoPdf')} checked={s.autoPdf} onChange={(v) => update({ autoPdf: v })} />
+        {s.processing === 'server' && <div className="hint small muted">{t('options.autoPdfServerHint')}</div>}
         <Check
           label={t('options.includeTranscript')}
           checked={s.pdfIncludeTranscript}
           onChange={(v) => update({ pdfIncludeTranscript: v })}
         />
         <Check label={t('options.saveTextFiles')} checked={s.saveTextFiles} onChange={(v) => update({ saveTextFiles: v })} />
+      </section>
+
+      <section className="card stack">
+        <h2>{t('options.section.recording')}</h2>
+        <div className="grid2">
+          <Field label={t('options.resolution')}>
+            <select
+              value={s.videoResolution}
+              onChange={(e) => update({ videoResolution: e.target.value as Settings['videoResolution'] })}
+            >
+              <option value="480p">480p</option>
+              <option value="720p">720p (HD)</option>
+              <option value="1080p">1080p (Full HD)</option>
+            </select>
+          </Field>
+          <Field label={t('options.fps')}>
+            <select value={s.videoFps} onChange={(e) => update({ videoFps: Number(e.target.value) as Settings['videoFps'] })}>
+              <option value={15}>15</option>
+              <option value={30}>30</option>
+            </select>
+          </Field>
+          <Field label={t('options.bitrate')}>
+            <input
+              type="number"
+              min={0}
+              step={100}
+              value={s.videoBitrateKbps}
+              onChange={(e) => update({ videoBitrateKbps: Number(e.target.value) })}
+            />
+          </Field>
+          <Field label={t('options.segment')} hint={t('options.segmentHint')}>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={s.segmentMinutes}
+              onChange={(e) => update({ segmentMinutes: Number(e.target.value) })}
+            />
+          </Field>
+        </div>
+        <Check label={t('options.recordMic')} checked={s.recordMic} onChange={(v) => update({ recordMic: v })} />
+      </section>
+
+      <section className="card stack">
+        <h2>{t('options.section.storage')}</h2>
+        <Field label={t('options.folder')} hint={t('options.folderHint')}>
+          <input type="text" value={s.folder} onChange={(e) => update({ folder: e.target.value })} />
+        </Field>
+        <Check label={t('options.askWhere')} checked={s.askWhereToSave} onChange={(v) => update({ askWhereToSave: v })} />
       </section>
 
       <section className="card stack">

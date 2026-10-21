@@ -7,10 +7,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
-import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { startMockApi } from './mock-api.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const extensionPath = path.join(root, '.output/chrome-mv3-e2e');
@@ -31,119 +31,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ---------------------------------------------------------------------------
 // Mock OpenAI-compatible API
 
-const SUMMARY = {
-  language: 'id',
-  labels: {
-    minutes: 'Notulen Rapat',
-    date: 'Tanggal',
-    duration: 'Durasi',
-    platform: 'Platform',
-    spokenLanguages: 'Bahasa',
-    participants: 'Peserta',
-    executiveSummary: 'Ringkasan Eksekutif',
-    keyPoints: 'Poin Penting',
-    topics: 'Pembahasan',
-    decisions: 'Keputusan',
-    actionItems: 'Tindak Lanjut',
-    task: 'Tugas',
-    owner: 'PIC',
-    deadline: 'Tenggat',
-    priority: 'Prioritas',
-    openQuestions: 'Pertanyaan Terbuka',
-    nextSteps: 'Langkah Berikutnya',
-    timeline: 'Linimasa',
-    transcript: 'Transkrip',
-  },
-  title: 'Rapat Mingguan Tim Produk',
-  spokenLanguages: ['Bahasa Indonesia', 'English', '日本語'],
-  participants: [
-    { name: 'Budi Santoso', role: 'Product Manager' },
-    { name: '田中 太郎', role: 'Engineer' },
-    { name: 'أحمد', role: 'Designer' },
-  ],
-  executiveSummary: 'Tim membahas rilis versi 2.0 dan menyepakati tanggal rilis.\n\nRisiko utama ada pada pengujian.',
-  keyPoints: ['Rilis versi 2.0 dijadwalkan 1 November', 'Pengujian perlu ditambah'],
-  topics: [{ title: 'Rilis versi 2.0', time: '00:00:05', summary: 'Jadwal rilis dibahas.', points: ['QA mulai Senin'] }],
-  decisions: [{ decision: 'Rilis pada 1 November', context: 'Jika QA selesai' }],
-  actionItems: [{ task: 'Kirim laporan QA', owner: 'Budi', deadline: 'Jumat', priority: 'tinggi' }],
-  openQuestions: ['Siapa yang menangani dokumentasi?'],
-  nextSteps: ['Rapat lanjutan minggu depan'],
-  timeline: [{ time: '00:00:05', event: 'Pembukaan' }],
-};
-
-const requests = { transcriptions: [], chats: [], vision: [] };
-
-const server = http.createServer((req, res) => {
-  const cors = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': '*',
-    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-  };
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204, cors).end();
-    return;
-  }
-  const chunks = [];
-  req.on('data', (c) => chunks.push(c));
-  req.on('end', () => {
-    const body = Buffer.concat(chunks);
-    const json = (status, data) =>
-      res.writeHead(status, { ...cors, 'Content-Type': 'application/json' }).end(JSON.stringify(data));
-    // The vision API is configured as a separate endpoint with its own key.
-    const isVisionApi = req.url.startsWith('/vision/');
-    if (req.headers.authorization !== (isVisionApi ? 'Bearer vision-key' : 'Bearer test-key')) {
-      return json(401, { error: { message: 'bad key' } });
-    }
-    if (isVisionApi && req.url !== '/vision/v1/chat/completions') return json(404, { error: { message: req.url } });
-
-    if (req.url === '/v1/audio/transcriptions') {
-      const text = body.toString('latin1');
-      const n = requests.transcriptions.length;
-      requests.transcriptions.push({
-        bytes: body.length,
-        model: /name="model"\r\n\r\n([^\r]+)/.exec(text)?.[1],
-        format: /name="response_format"\r\n\r\n([^\r]+)/.exec(text)?.[1],
-        isWebm: text.includes('\x1aE\xdf\xa3'),
-      });
-      return json(200, {
-        text: `Segment ${n + 1}: Halo semua, mari mulai. Let's discuss the release.`,
-        segments: [
-          { start: 1, end: 4, text: `Segment ${n + 1}: Halo semua, mari mulai.` },
-          { start: 5, end: 9, text: "Let's discuss the release." },
-        ],
-      });
-    }
-    if (req.url === '/v1/chat/completions' || req.url === '/vision/v1/chat/completions') {
-      const data = JSON.parse(body.toString('utf8'));
-      const reply = (content) =>
-        json(200, { choices: [{ message: { role: 'assistant', content: JSON.stringify(content) }, finish_reason: 'stop' }] });
-      const parts = data.messages.flatMap((m) => (Array.isArray(m.content) ? m.content : []));
-      if (parts.some((p) => p.type === 'image_url')) {
-        // Vision request: describe every screenshot as a slide.
-        const ids = parts.flatMap((p) =>
-          p.type === 'text' ? [...p.text.matchAll(/Image #(\d+) at/g)].map((m) => Number(m[1])) : [],
-        );
-        const images = parts.filter((p) => p.type === 'image_url').map((p) => p.image_url);
-        const times = parts.flatMap((p) => (p.type === 'text' ? [...p.text.matchAll(/at \[([\d:]+)\]/g)].map((m) => m[1]) : []));
-        requests.vision.push({ url: req.url, model: data.model, ids, images, times });
-        return reply({
-          images: ids.map((id) => ({ id, kind: 'slide', useful: 8, caption: `Roadmap slide ${id}`, text: `Roadmap item ${id}` })),
-        });
-      }
-      if (isVisionApi) return json(400, { error: { message: 'summary sent to the vision API' } });
-      requests.chats.push(data);
-      // Pick the first two screenshots offered in the prompt for the first topic.
-      const prompt = data.messages.find((m) => m.role === 'user').content;
-      const offered = [...prompt.matchAll(/^#(\d+) \[/gm)].map((m) => Number(m[1]));
-      const summary = structuredClone(SUMMARY);
-      summary.topics[0].images = offered.slice(0, 2).map((id) => ({ id, caption: `Slide roadmap #${id}` }));
-      return reply(summary);
-    }
-    json(404, { error: { message: `unknown path ${req.url}` } });
-  });
-});
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const apiBase = `http://127.0.0.1:${server.address().port}/v1`;
+const { apiBase, requests, server } = await startMockApi();
 log('mock API at', apiBase);
 
 // ---------------------------------------------------------------------------
@@ -223,6 +111,8 @@ try {
           detail: 'high',
           temperature: '',
           jsonMode: true,
+          batchSize: 4,
+          extraBody: '{"max_tokens": 512}',
         },
         segmentMinutes: 1,
         autoProcess: true,
@@ -241,6 +131,7 @@ try {
   await visionCard.getByText('Koneksi OK — model membaca: "Roadmap item 1"').waitFor({ timeout: 15_000 });
   assert.equal(requests.vision.length, 1);
   assert.match(requests.vision[0].images[0].url, /^data:image\/png;base64,/);
+  assert.equal(requests.vision[0].maxTokens, 512, 'test connection sends the extra body parameters');
   requests.vision.length = 0;
   log('vision test connection OK');
 
@@ -375,7 +266,8 @@ try {
   for (const v of requests.vision) {
     assert.equal(v.url, '/vision/v1/chat/completions');
     assert.equal(v.model, 'vision-test');
-    assert.ok(v.images.length <= 6 && v.ids.length === v.images.length);
+    assert.ok(v.images.length <= 4 && v.ids.length === v.images.length);
+    assert.equal(v.maxTokens, 512, 'extra body parameters are sent');
     for (const img of v.images) {
       assert.match(img.url, /^data:image\/jpeg;base64,\/9j\//);
       assert.equal(img.detail, 'high');

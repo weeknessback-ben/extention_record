@@ -9,7 +9,7 @@ import {
   type OffscreenMessage,
 } from '@/lib/messages';
 import { cleanTabTitle, siteOf } from '@/lib/meeting';
-import { getSettings, isAiConfigured } from '@/lib/settings';
+import { getSettings, isProcessingConfigured } from '@/lib/settings';
 import type { ActiveRecording } from '@/lib/types';
 
 const OFFSCREEN_PATH = '/offscreen.html';
@@ -153,11 +153,17 @@ export default defineBackground(() => {
         // The report page exports the PDF (and text files) itself, then closes.
         await browser.tabs.create({ url: reportUrl(recId, true), active: false });
       }
+      const telegram = rec?.server?.telegram;
       await browser.notifications.create(`report:${recId}`, {
         type: 'basic',
         iconUrl: browser.runtime.getURL('/icon/128.png'),
         title: t('notify.readyTitle'),
-        message: title,
+        message:
+          telegram === 'sent'
+            ? `${title}\n${t('notify.sentToTelegram')}`
+            : telegram === 'failed'
+              ? `${title}\n${t('notify.telegramFailed')}`
+              : title,
       });
     } else {
       await browser.notifications.create(`library:${recId}`, {
@@ -167,6 +173,19 @@ export default defineBackground(() => {
         message: `${title}\n${error ?? ''}`.trim(),
       });
     }
+  }
+
+  /** Server mode: everything is on the server, so the laptop may be closed from here on. */
+  async function onUploaded(recId: string) {
+    const settings = await getSettings();
+    setUiLanguage(settings.uiLanguage);
+    const rec = await getRecording(recId);
+    await browser.notifications.create(`library:${recId}`, {
+      type: 'basic',
+      iconUrl: browser.runtime.getURL('/icon/128.png'),
+      title: t('notify.uploadedTitle'),
+      message: `${rec?.title ?? ''}\n${t('notify.uploadedBody')}`.trim(),
+    });
   }
 
   function reportUrl(recId: string, auto = false): string {
@@ -186,7 +205,7 @@ export default defineBackground(() => {
       }
       case 'get-state': {
         const settings = await getSettings();
-        const state: BackgroundState = { active: await getActive(), configured: isAiConfigured(settings), settings };
+        const state: BackgroundState = { active: await getActive(), configured: isProcessingConfigured(settings), settings };
         return state;
       }
       case 'start':
@@ -219,6 +238,9 @@ export default defineBackground(() => {
       case 'pipeline-finished':
         await onPipelineFinished(msg.recId, msg.ok, msg.error);
         return { ok: true };
+      case 'uploaded':
+        await onUploaded(msg.recId);
+        return { ok: true };
       case 'e2e-start':
         if (import.meta.env.MODE !== 'e2e') return undefined;
         return startRecording(msg.tabId, msg.title, msg.recordMic, true);
@@ -237,6 +259,7 @@ export default defineBackground(() => {
       'download',
       'recorder-stopped',
       'pipeline-finished',
+      'uploaded',
       'e2e-start',
     ];
     if (!known.includes(msg.type)) return;
@@ -309,11 +332,23 @@ export default defineBackground(() => {
   // After a browser restart nothing is recording or processing any more.
   browser.runtime.onStartup.addListener(async () => {
     await setActive(null);
+    const resumeOnServer: string[] = [];
     for (const rec of await listRecordings()) {
       if (rec.status === 'recording' || rec.status === 'saving') {
         await updateRecording(rec.id, { status: 'interrupted' });
+      } else if (rec.server && ['uploading', 'queued', 'transcribing', 'analyzing', 'summarizing'].includes(rec.status)) {
+        // The server kept working; pick up the upload or the status polling again.
+        resumeOnServer.push(rec.id);
       } else if (rec.status === 'transcribing' || rec.status === 'analyzing' || rec.status === 'summarizing') {
         await updateRecording(rec.id, { status: 'error', error: 'Processing was interrupted.', progress: undefined });
+      }
+    }
+    if (resumeOnServer.length) {
+      const settings = await getSettings();
+      if (settings.processing === 'server') {
+        for (const recId of resumeOnServer) {
+          void toOffscreen({ target: 'offscreen', type: 'process', recId, mode: 'all', settings }).catch(() => {});
+        }
       }
     }
   });

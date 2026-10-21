@@ -21,6 +21,106 @@ const PIXEL_DELTA = 16;
 export const THUMB_WIDTH = 160;
 export const THUMB_HEIGHT = 90;
 const MAX_WIDTH = 1280;
+/** A crop must cover at least this share of the width and height, else the whole frame is kept. */
+const MIN_CROP_SHARE = 0.25;
+
+/** A rectangle in thumbnail pixels. */
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Side of the blocks in which changes are counted for the content region (thumbnail pixels). */
+const BLOCK = 4;
+const BLOCKS_X = Math.ceil(THUMB_WIDTH / BLOCK);
+const BLOCKS_Y = Math.ceil(THUMB_HEIGHT / BLOCK);
+/** A block is shared content when it changed in at least this share of the screen changes (and twice). */
+const REGION_SHARE = 0.3;
+
+/** Connected changed blocks smaller than this (the mouse pointer, a small icon or tile) are ignored. */
+const MIN_PATCH = 6;
+
+/**
+ * The 4×4 blocks where the shared content changed between two thumbnails: at least a quarter of
+ * the block's (unmasked) pixels differ, and it is part of a connected patch of at least MIN_PATCH
+ * blocks. A new slide or page changes one large area; a pointer or a small tile only a few blocks.
+ */
+export function changedBlocks(a: Uint8Array, b: Uint8Array, mask?: Uint8Array, channels = 1): Uint8Array {
+  const counts = new Uint16Array(BLOCKS_X * BLOCKS_Y);
+  for (let p = 0; p < a.length / channels; p++) {
+    if ((mask && !mask[p]) || !pixelChanged(a, b, p, channels)) continue;
+    counts[Math.floor(Math.floor(p / THUMB_WIDTH) / BLOCK) * BLOCKS_X + Math.floor((p % THUMB_WIDTH) / BLOCK)]!++;
+  }
+  const changed = Uint8Array.from(counts, (c) => (c >= (BLOCK * BLOCK) / 4 ? 1 : 0));
+  const out = new Uint8Array(changed.length);
+  const seen = new Uint8Array(changed.length);
+  for (let start = 0; start < changed.length; start++) {
+    if (!changed[start] || seen[start]) continue;
+    // Flood fill one patch of touching blocks (8 neighbours).
+    const patch = [start];
+    seen[start] = 1;
+    for (let i = 0; i < patch.length; i++) {
+      const bx = patch[i]! % BLOCKS_X;
+      const by = Math.floor(patch[i]! / BLOCKS_X);
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const x = bx + dx;
+          const y = by + dy;
+          const k = y * BLOCKS_X + x;
+          if (x < 0 || y < 0 || x >= BLOCKS_X || y >= BLOCKS_Y || !changed[k] || seen[k]) continue;
+          seen[k] = 1;
+          patch.push(k);
+        }
+      }
+    }
+    if (patch.length >= MIN_PATCH) for (const k of patch) out[k] = 1;
+  }
+  return out;
+}
+
+/** Bounding box (thumbnail pixels) of the blocks that changed at least `min` times. */
+function regionFrom(hits: Uint16Array, min: number): Box | undefined {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -1;
+  let y1 = -1;
+  hits.forEach((n, k) => {
+    if (n < min) return;
+    const bx = k % BLOCKS_X;
+    const by = Math.floor(k / BLOCKS_X);
+    x0 = Math.min(x0, bx);
+    y0 = Math.min(y0, by);
+    x1 = Math.max(x1, bx);
+    y1 = Math.max(y1, by);
+  });
+  if (x1 < 0) return undefined;
+  return {
+    x: x0 * BLOCK,
+    y: y0 * BLOCK,
+    w: Math.min(THUMB_WIDTH, (x1 + 1) * BLOCK) - x0 * BLOCK,
+    h: Math.min(THUMB_HEIGHT, (y1 + 1) * BLOCK) - y0 * BLOCK,
+  };
+}
+
+/**
+ * The part of a `width`×`height` frame to keep for a content region found on the thumbnails, with a
+ * small margin; undefined (keep everything) when the region is too small to be the shared content.
+ */
+export function cropBox(region: Box | undefined, width: number, height: number): Box | undefined {
+  if (!region || region.w < THUMB_WIDTH * MIN_CROP_SHARE || region.h < THUMB_HEIGHT * MIN_CROP_SHARE) return undefined;
+  const sx = width / THUMB_WIDTH;
+  const sy = height / THUMB_HEIGHT;
+  const x = Math.max(0, Math.floor((region.x - 1) * sx));
+  const y = Math.max(0, Math.floor((region.y - 1) * sy));
+  return {
+    x,
+    y,
+    w: Math.min(width, Math.ceil((region.x + region.w + 1) * sx)) - x,
+    h: Math.min(height, Math.ceil((region.y + region.h + 1) * sy)) - y,
+  };
+}
 
 function pixelChanged(a: Uint8Array, b: Uint8Array, pixel: number, channels: number): boolean {
   for (let c = 0; c < channels; c++) {
@@ -55,6 +155,14 @@ export class ChangeDetector {
   private lastSavedAt = -Infinity;
   /** When the not yet captured change was first seen. */
   private changeSince?: number;
+  /**
+   * Where the screen keeps changing from one screenshot to the next (thumbnail pixels): the shared
+   * slides or document. Video tiles are masked out; the mouse pointer or a flickering tile only touches
+   * a block now and then, so it does not count.
+   */
+  region?: Box;
+  private blockHits = new Uint16Array(BLOCKS_X * BLOCKS_Y);
+  private diffs = 0;
 
   constructor(
     private readonly threshold: number,
@@ -95,6 +203,11 @@ export class ChangeDetector {
     if (!settled || t - this.lastSavedAt < this.minGapMs) return undefined;
 
     const stamp = this.changeSince;
+    if (this.lastSaved) {
+      changedBlocks(thumb, this.lastSaved, mask, this.channels).forEach((c, k) => (this.blockHits[k]! += c));
+      this.diffs++;
+      this.region = regionFrom(this.blockHits, Math.max(2, this.diffs * REGION_SHARE));
+    }
     this.lastSaved = thumb;
     this.lastSavedAt = t;
     this.changeSince = undefined;
@@ -113,6 +226,8 @@ export interface CapturedFrame {
 export interface SlideCaptureOptions {
   sensitivity: Settings['slides']['sensitivity'];
   maxFrames: number;
+  /** Keep only the part of the screen that changes (the shared content), not the meeting interface. */
+  crop?: boolean;
   elapsed: () => number;
   onFrame: (frame: CapturedFrame) => void;
   intervalMs?: number;
@@ -164,11 +279,17 @@ export class SlideCapture {
   }
 
   private async encode(bitmap: ImageBitmap): Promise<{ blob: Blob; width: number; height: number }> {
-    const scale = Math.min(1, MAX_WIDTH / bitmap.width);
-    const width = Math.round(bitmap.width * scale);
-    const height = Math.round(bitmap.height * scale);
+    const area = (this.opts.crop && cropBox(this.detector.region, bitmap.width, bitmap.height)) || {
+      x: 0,
+      y: 0,
+      w: bitmap.width,
+      h: bitmap.height,
+    };
+    const scale = Math.min(1, MAX_WIDTH / area.w);
+    const width = Math.round(area.w * scale);
+    const height = Math.round(area.h * scale);
     const canvas = new OffscreenCanvas(width, height);
-    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, width, height);
+    canvas.getContext('2d')!.drawImage(bitmap, area.x, area.y, area.w, area.h, 0, 0, width, height);
     return { blob: await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }), width, height };
   }
 

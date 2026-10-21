@@ -212,9 +212,9 @@ export const VISION_SYSTEM_PROMPT = `You analyse screenshots taken automatically
 For every image return an object with:
 - "id": the number given just before the image,
 - "kind": one of "slide", "document", "chart", "diagram", "code", "whiteboard", "website", "screen", "people", "other",
-- "useful": integer 0-10, how useful the image is to document what was presented (10 = clear slide, chart or diagram with meaningful readable content; 0 = only faces, an empty or loading screen, or just the meeting interface),
+- "useful": integer 0-10, how useful the image is to document what was presented (10 = clear slide, chart or diagram with meaningful readable content; 5 = readable but routine content such as a menu or a mostly empty form; 0 = only faces, an empty or loading screen, a dialog or picker such as choosing what to share, or just the meeting interface),
 - "caption": one short English sentence describing what is shown,
-- "text": the most important visible text of the shared content, copied verbatim in its original language and script (titles, bullet points, numbers), at most 500 characters; empty if none.
+- "text": the most important visible text of the shared content, copied verbatim in its original language and script, at most 300 characters: the title and the key lines or numbers. For a table, form, chart or long list give its title and only the most important rows or values, never every cell. Empty if none.
 Ignore the meeting interface itself (toolbars, participant names, chat bubbles).
 Reply with ONE JSON object {"images": [ ... ]} and nothing else.`;
 
@@ -231,12 +231,18 @@ const FRAME_KINDS: FrameKind[] = [
   'other',
 ];
 
-/** Parses the vision reply into analyses keyed by image id. */
-export function normalizeFrameAnalyses(raw: unknown): Map<number, FrameAnalysis> {
+/**
+ * Parses the vision reply into analyses keyed by image id. With `onlyId` (a single image was
+ * sent) the first entry is used whatever id the model gave it, as small models often get it wrong.
+ */
+export function normalizeFrameAnalyses(raw: unknown, onlyId?: number): Map<number, FrameAnalysis> {
   const out = new Map<number, FrameAnalysis>();
-  for (const item of arr(obj(raw).images)) {
+  const root = obj(raw);
+  // A single image is sometimes described without the {"images": [...]} wrapper.
+  const items = onlyId === undefined || 'images' in root ? arr(root.images) : [root];
+  for (const item of items) {
     const o = obj(item);
-    const id = Number(o.id);
+    const id = onlyId ?? Number(o.id);
     if (!Number.isFinite(id)) continue;
     const kind = str(o.kind).toLowerCase() as FrameKind;
     out.set(id, {
@@ -245,6 +251,7 @@ export function normalizeFrameAnalyses(raw: unknown): Map<number, FrameAnalysis>
       caption: str(o.caption),
       text: str(o.text).slice(0, 800),
     });
+    if (onlyId !== undefined) break;
   }
   return out;
 }

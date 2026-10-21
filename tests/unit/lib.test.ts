@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { endpointUrl, parseExtraHeaders, parseJsonLoose, transcriptionFormat } from '@/lib/ai';
+import { endpointUrl, parseExtraBody, parseExtraHeaders, parseJsonLoose, transcriptionFormat } from '@/lib/ai';
 import { recordingFolder, sanitizeFolder, sanitizeSegment } from '@/lib/files';
 import { chunkTranscript, formatClock, groupTranscript, isRtl, summaryToMarkdown } from '@/lib/format';
 import { cleanTabTitle, detectPlatform, siteOf } from '@/lib/meeting';
@@ -7,6 +7,7 @@ import { finalSystemPrompt, normalizeSummary } from '@/lib/prompts';
 import {
   DEFAULT_SETTINGS,
   isAiConfigured,
+  isTelegramChatId,
   isVisionConfigured,
   mergeSettings,
   summaryEndpoint,
@@ -53,6 +54,13 @@ describe('ai helpers', () => {
     expect(parseExtraHeaders('')).toEqual({});
     expect(parseExtraHeaders('{"api-key": 12}')).toEqual({ 'api-key': '12' });
     expect(() => parseExtraHeaders('[1]')).toThrow();
+  });
+
+  it('validates extra body parameters', () => {
+    expect(parseExtraBody('  ')).toEqual({});
+    expect(parseExtraBody('{"max_tokens": 512, "max_side": 768}')).toEqual({ max_tokens: 512, max_side: 768 });
+    expect(() => parseExtraBody('[1]')).toThrow();
+    expect(() => parseExtraBody('{max_tokens: 512}')).toThrow();
   });
 
   it('chooses response formats per model', () => {
@@ -127,6 +135,25 @@ describe('settings', () => {
   });
 });
 
+describe('processing settings', () => {
+  it('merges stored settings over another base, e.g. defaults baked in at build time', () => {
+    const base = mergeSettings({
+      processing: 'server',
+      server: { baseUrl: 'https://x/meeting', apiKey: 'k', telegramChatId: '' },
+    });
+    expect(mergeSettings({ server: { telegramChatId: '7' } } as never, base)).toMatchObject({
+      processing: 'server',
+      server: { baseUrl: 'https://x/meeting', apiKey: 'k', telegramChatId: '7' },
+    });
+    expect(DEFAULT_SETTINGS.processing).toBe('local');
+  });
+
+  it('validates Telegram chat ids', () => {
+    for (const id of ['123456789', '-1001234567890', '@my_channel']) expect(isTelegramChatId(id)).toBe(true);
+    for (const id of ['', 'abc', '@ab', '12 34', 'https://t.me/x']) expect(isTelegramChatId(id)).toBe(false);
+  });
+});
+
 describe('vision settings', () => {
   const base = mergeSettings({ transcription: { ...DEFAULT_SETTINGS.transcription, apiKey: 'k' } });
 
@@ -163,6 +190,13 @@ describe('vision settings', () => {
     expect(migrated.vision.model).toBe('gpt-4o');
     expect(migrated.vision.detail).toBe('high');
     expect('model' in migrated.slides).toBe(false);
+  });
+
+  it('fills in batch size and extra body for settings saved before they existed', () => {
+    const { batchSize: _b, extraBody: _e, ...older } = DEFAULT_SETTINGS.vision;
+    const s = mergeSettings({ vision: older as never });
+    expect(s.vision.batchSize).toBe(6);
+    expect(s.vision.extraBody).toBe('');
   });
 });
 

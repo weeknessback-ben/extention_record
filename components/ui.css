@@ -224,6 +224,8 @@ label {
   background: color-mix(in srgb, var(--ok) 15%, transparent);
   color: var(--ok);
 }
+.badge.uploading,
+.badge.queued,
 .badge.transcribing,
 .badge.analyzing,
 .badge.summarizing,

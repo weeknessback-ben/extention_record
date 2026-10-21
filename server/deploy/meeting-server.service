@@ -1,0 +1,18 @@
+[Unit]
+Description=Meeting Recorder processing server (minutes to Telegram)
+After=network-online.target stt-api.service vision-api.service
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/proyek/meeting-server
+EnvironmentFile=/home/ubuntu/proyek/meeting-server/.env
+ExecStart=/usr/bin/node /home/ubuntu/proyek/meeting-server/server.mjs
+Restart=on-failure
+RestartSec=5
+# Node plus a short-lived headless Chromium while a PDF is printed.
+MemoryMax=1536M
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

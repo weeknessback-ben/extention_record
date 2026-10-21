@@ -1,0 +1,11 @@
+	# Inside the site block, before the catch-all `handle`.
+	handle_path /meeting/* {
+		request_body {
+			max_size 50MB
+		}
+		reverse_proxy 127.0.0.1:8120 {
+			transport http {
+				read_timeout 300s
+			}
+		}
+	}
